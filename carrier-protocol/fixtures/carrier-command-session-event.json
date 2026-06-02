@@ -1,0 +1,13 @@
+{
+  "schema": "narada.carrier.session_event.v1",
+  "event_kind": "carrier_command_executed",
+  "event_id": "session_event_carrier_command_fixture_1",
+  "occurred_at": "2026-05-30T00:00:08.000Z",
+  "carrier_session_id": "carrier_fixture_1",
+  "agent_id": "sonar.resident",
+  "site_id": "narada-sonar",
+  "site_root": "D:/code/narada.sonar",
+  "payload": {
+    "command": "queue_show"
+  }
+}

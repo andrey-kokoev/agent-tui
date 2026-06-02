@@ -1,0 +1,8 @@
+{
+  "schema": "narada.agent_tui.launch_slice_contract.v0",
+  "admitted_runtime_slice": "terminal_interactive_loop",
+  "carrier_flag": "--interactive-loop",
+  "tool_fabric_adapter_kind": "narada-agent-tui-terminal-interactive-loop",
+  "capability_policy_terminal_session": "interactive_terminal_control_jsonl_session_jsonl",
+  "terminal_mode": true
+}

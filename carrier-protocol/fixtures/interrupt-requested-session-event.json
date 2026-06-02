@@ -1,0 +1,13 @@
+{
+  "schema": "narada.carrier.session_event.v1",
+  "event_kind": "interrupt_requested",
+  "event_id": "session_event_interrupt_requested_fixture_1",
+  "occurred_at": "2026-05-30T00:00:19.000Z",
+  "carrier_session_id": "carrier_fixture_1",
+  "agent_id": "sonar.resident",
+  "site_id": "narada-sonar",
+  "site_root": "D:/code/narada.sonar",
+  "payload": {
+    "turn_id": "turn_fixture_1"
+  }
+}

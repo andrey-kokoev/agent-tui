@@ -1,0 +1,17 @@
+{
+  "schema": "narada.carrier.session_event.v1",
+  "event_kind": "system_directive_held",
+  "event_id": "session_event_system_directive_held_fixture_1",
+  "occurred_at": "2026-05-30T00:00:12.000Z",
+  "carrier_session_id": "carrier_fixture_1",
+  "agent_id": "sonar.resident",
+  "site_id": "narada-sonar",
+  "site_root": "D:/code/narada.sonar",
+  "payload": {
+    "input_event_id": "input_directive_fixture_1",
+    "directive_id": "dir_fixture_1",
+    "held_at": "2026-05-30T00:00:12.000Z",
+    "held_reason": "composer_nonempty",
+    "original_delivery_mode": "admit_for_current_turn"
+  }
+}

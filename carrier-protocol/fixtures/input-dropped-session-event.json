@@ -1,0 +1,14 @@
+{
+  "schema": "narada.carrier.session_event.v1",
+  "event_kind": "input_dropped_by_operator",
+  "event_id": "session_event_input_dropped_fixture_1",
+  "occurred_at": "2026-05-30T00:00:15.000Z",
+  "carrier_session_id": "carrier_fixture_1",
+  "agent_id": "sonar.resident",
+  "site_id": "narada-sonar",
+  "site_root": "D:/code/narada.sonar",
+  "payload": {
+    "input_event_id": "input_fixture_1",
+    "drop_reason": "operator_queue_drop"
+  }
+}

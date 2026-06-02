@@ -1,0 +1,18 @@
+{
+  "schema": "narada.carrier.session_event.v1",
+  "event_kind": "provider_text_delta_recorded",
+  "event_id": "session_event_provider_text_delta_fixture_1",
+  "occurred_at": "2026-05-30T00:00:04.000Z",
+  "carrier_session_id": "carrier_fixture_1",
+  "agent_id": "sonar.resident",
+  "site_id": "narada-sonar",
+  "site_root": "D:/code/narada.sonar",
+  "payload": {
+    "schema": "narada.agent_tui.provider_output_payload.v0",
+    "turn_id": "turn_fixture_1",
+    "provider_output_kind": "text_delta",
+    "sequence": 1,
+    "text_delta": "Startup sequence completed.",
+    "text_delta_ref": null
+  }
+}

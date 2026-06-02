@@ -1,0 +1,6 @@
+{
+  "schema": "narada.agent_tui.terminal_runtime_contract.v0",
+  "terminal_rendering_env_var": "NARADA_AGENT_TUI_ENABLE_TERMINAL_RENDERING",
+  "terminal_mode_env_var": "NARADA_AGENT_TUI_TERMINAL_MODE",
+  "required_terminal_mode": "interactive_loop"
+}

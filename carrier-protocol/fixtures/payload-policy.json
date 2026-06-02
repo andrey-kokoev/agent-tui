@@ -1,0 +1,6 @@
+{
+  "schema": "narada.carrier.payload_policy.v1",
+  "max_inline_chars": 4000,
+  "max_inline_bytes": 16384,
+  "sensitive_payloads_require_ref": true
+}

@@ -1,0 +1,6 @@
+{
+  "schema": "narada.carrier.payload_ref.v1",
+  "payload_ref": "mcp_payload:payload_fixture_1@v1",
+  "reader_tool": "mcp_payload_read",
+  "summary": "fixture payload omitted from transcript"
+}

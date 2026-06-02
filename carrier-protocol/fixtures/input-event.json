@@ -1,0 +1,14 @@
+{
+  "schema": "narada.carrier.input_event.v1",
+  "event_id": "input_fixture_1",
+  "source_kind": "operator",
+  "source_id": "operator",
+  "transport": "interactive_terminal",
+  "delivery_mode": "admit_for_current_turn",
+  "hold_condition": null,
+  "content": "run startup sequence",
+  "created_at": "2026-05-30T00:00:00.000Z",
+  "authority_ref": null,
+  "directive_id": null,
+  "metadata": {}
+}

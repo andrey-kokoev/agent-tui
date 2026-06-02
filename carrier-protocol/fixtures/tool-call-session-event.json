@@ -1,0 +1,16 @@
+{
+  "schema": "narada.carrier.session_event.v1",
+  "event_kind": "tool_call_requested",
+  "event_id": "session_event_tool_call_fixture_1",
+  "occurred_at": "2026-05-30T00:00:06.000Z",
+  "carrier_session_id": "carrier_fixture_1",
+  "agent_id": "sonar.resident",
+  "site_id": "narada-sonar",
+  "site_root": "D:/code/narada.sonar",
+  "payload": {
+    "tool_name": "site_loop_run_once",
+    "arguments_summary": "{}",
+    "arguments_ref": null,
+    "requesting_agent_id": "sonar.resident"
+  }
+}

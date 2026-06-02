@@ -1,0 +1,19 @@
+{
+  "schema": "narada.carrier.session_event.v1",
+  "event_kind": "turn_failed",
+  "event_id": "session_event_turn_failed_fixture_1",
+  "occurred_at": "2026-05-30T00:00:21.000Z",
+  "carrier_session_id": "carrier_fixture_1",
+  "agent_id": "sonar.resident",
+  "site_id": "narada-sonar",
+  "site_root": "D:/code/narada.sonar",
+  "payload": {
+    "schema": "narada.agent_tui.turn_terminal_payload.v0",
+    "turn_id": "turn_fixture_1",
+    "input_event_id": "input_fixture_1",
+    "terminal_status": "failed",
+    "provider_request_status": "failed",
+    "provider_execution_enabled": true,
+    "error_summary": "provider dispatch failed"
+  }
+}

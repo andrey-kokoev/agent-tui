@@ -1,0 +1,89 @@
+{
+  "schema": "narada.carrier.session_event_fixture_manifest.v1",
+  "fixtures": [
+    {
+      "event_kind": "input_queued_for_turn_boundary",
+      "fixture": "input-queued-session-event.json"
+    },
+    {
+      "event_kind": "input_admitted_to_turn",
+      "fixture": "session-event.json"
+    },
+    {
+      "event_kind": "input_dropped_by_operator",
+      "fixture": "input-dropped-session-event.json"
+    },
+    {
+      "event_kind": "input_abandoned_on_session_end",
+      "fixture": "input-abandoned-session-event.json"
+    },
+    {
+      "event_kind": "input_completed",
+      "fixture": "input-completed-session-event.json"
+    },
+    {
+      "event_kind": "system_directive_held",
+      "fixture": "system-directive-held-session-event.json"
+    },
+    {
+      "event_kind": "system_directive_released",
+      "fixture": "system-directive-released-session-event.json"
+    },
+    {
+      "event_kind": "directive_receipt_recorded",
+      "fixture": "directive-receipt-session-event.json"
+    },
+    {
+      "event_kind": "directive_carrier_accepted_recorded",
+      "fixture": "directive-carrier-accepted-session-event.json"
+    },
+    {
+      "event_kind": "turn_started",
+      "fixture": "turn-started-session-event.json"
+    },
+    {
+      "event_kind": "provider_request_recorded",
+      "fixture": "provider-request-session-event.json"
+    },
+    {
+      "event_kind": "provider_text_delta_recorded",
+      "fixture": "provider-text-delta-session-event.json"
+    },
+    {
+      "event_kind": "provider_tool_call_requested",
+      "fixture": "provider-tool-call-session-event.json"
+    },
+    {
+      "event_kind": "turn_completed",
+      "fixture": "turn-terminal-session-event.json"
+    },
+    {
+      "event_kind": "turn_interrupted",
+      "fixture": "turn-interrupted-session-event.json"
+    },
+    {
+      "event_kind": "turn_failed",
+      "fixture": "turn-failed-session-event.json"
+    },
+    {
+      "event_kind": "interrupt_requested",
+      "fixture": "interrupt-requested-session-event.json"
+    },
+    {
+      "event_kind": "tool_call_requested",
+      "fixture": "tool-call-session-event.json"
+    },
+    {
+      "event_kind": "tool_result_received",
+      "fixture": "tool-result-session-event.json"
+    },
+    {
+      "event_kind": "carrier_command_executed",
+      "fixture": "carrier-command-session-event.json"
+    },
+    {
+      "event_kind": "carrier_diagnostic_recorded",
+      "fixture": "carrier-diagnostic-session-event.json"
+    }
+  ]
+}
