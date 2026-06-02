@@ -6,8 +6,8 @@ use crate::runtime_coordinator::{
 };
 use crate::transcript_store::{TranscriptIngestSummary, TranscriptStore};
 use crate::turn_coordinator::{
-    CompletedTurn, NoopProviderToolCallExecutor, ProviderToolCallExecutor, TurnCoordinator,
-    TurnCoordinatorClock,
+    CompletedTurn, NoopProviderToolCallExecutor, ProviderToolCallExecution,
+    ProviderToolCallExecutor, TurnCoordinator, TurnCoordinatorClock,
 };
 use std::path::PathBuf;
 
@@ -236,9 +236,9 @@ mod tests {
             context: &SessionEvidenceContext,
             session_jsonl_path: &Path,
             clock: &TurnCoordinatorClock,
-        ) -> Result<usize, String> {
+        ) -> Result<ProviderToolCallExecution, String> {
             if output.kind != crate::provider_dispatch::ProviderOutputKind::ToolCallRequest {
-                return Ok(0);
+                return Ok(ProviderToolCallExecution::default());
             }
             let request = SessionEvent {
                 schema: SESSION_EVENT_SCHEMA.to_string(),
@@ -257,7 +257,10 @@ mod tests {
                 }),
             };
             append_session_event(session_jsonl_path, &request)?;
-            Ok(1)
+            Ok(ProviderToolCallExecution {
+                evidence_written: 1,
+                follow_up_text: None,
+            })
         }
     }
 

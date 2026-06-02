@@ -19,7 +19,13 @@ pub trait ProviderToolCallExecutor: Send {
         context: &SessionEvidenceContext,
         session_jsonl_path: &Path,
         clock: &TurnCoordinatorClock,
-    ) -> Result<usize, String>;
+    ) -> Result<ProviderToolCallExecution, String>;
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProviderToolCallExecution {
+    pub evidence_written: usize,
+    pub follow_up_text: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -32,11 +38,10 @@ impl ProviderToolCallExecutor for NoopProviderToolCallExecutor {
         _context: &SessionEvidenceContext,
         _session_jsonl_path: &Path,
         _clock: &TurnCoordinatorClock,
-    ) -> Result<usize, String> {
-        Ok(0)
+    ) -> Result<ProviderToolCallExecution, String> {
+        Ok(ProviderToolCallExecution::default())
     }
 }
-
 #[derive(Debug, Clone)]
 pub struct TurnCoordinatorClock {
     pub occurred_at: String,
@@ -152,7 +157,6 @@ impl TurnCoordinator {
             provider_adapter.set_session_thinking(thinking);
         }
     }
-
     pub fn run_one_ready_turn(
         &mut self,
         queue: &mut InputQueue,
@@ -167,40 +171,31 @@ impl TurnCoordinator {
         let start = self.turn_started_event(&input, &turn_id, clock);
         self.write_evidence(&start)?;
 
-        let provider_adapter = self
+        let mut provider_adapter = self
             .provider_adapter
-            .as_ref()
+            .take()
             .ok_or_else(|| "turn_provider_adapter_unavailable".to_string())?;
-        let provider_record =
-            provider_adapter.dispatch_request(&input, &turn_id, &ProviderCancellationToken::new());
-        let provider_request = self.provider_request_recorded_event(&provider_record, clock);
-        self.write_evidence(&provider_request)?;
-        let mut output_evidence_count = 0;
-        for output in &provider_record.outputs {
-            let output_event = self.provider_output_event(output, clock);
-            self.write_evidence(&output_event)?;
-            output_evidence_count += 1;
-            let provider_tool_call_executor = self
-                .provider_tool_call_executor
-                .as_mut()
-                .ok_or_else(|| "turn_provider_tool_call_executor_unavailable".to_string())?;
-            output_evidence_count += provider_tool_call_executor.handle_provider_output(
-                output,
-                &self.evidence_context,
-                &self.session_jsonl_path,
-                clock,
-            )?;
-        }
-
-        queue.set_turn_idle();
-        let terminal = self.turn_terminal_event(&input, &turn_id, &provider_record, clock);
-        self.write_evidence(&terminal)?;
-
-        Ok(Some(CompletedTurn {
+        let mut provider_tool_call_executor = self
+            .provider_tool_call_executor
+            .take()
+            .ok_or_else(|| "turn_provider_tool_call_executor_unavailable".to_string())?;
+        let cancellation = ProviderCancellationToken::new();
+        let result = run_turn_worker_inner(
+            provider_adapter.as_mut(),
+            provider_tool_call_executor.as_mut(),
+            &self.evidence_context,
+            &self.session_jsonl_path,
+            input,
             turn_id,
-            input_event_id: input.event_id,
-            evidence_written: 3 + output_evidence_count,
-        }))
+            clock,
+            &mut self.next_event_index,
+            &cancellation,
+        );
+        self.provider_adapter = Some(provider_adapter);
+        self.apply_pending_provider_settings();
+        self.provider_tool_call_executor = Some(provider_tool_call_executor);
+        queue.set_turn_idle();
+        result.map(Some)
     }
 
     pub fn run_one_ready_turn_background_tick(
@@ -301,54 +296,6 @@ impl TurnCoordinator {
             }),
         )
     }
-
-    fn provider_request_recorded_event(
-        &mut self,
-        record: &ProviderDispatchRecord,
-        clock: &TurnCoordinatorClock,
-    ) -> SessionEvent {
-        self.session_event(
-            SessionEventKind::ProviderRequestRecorded,
-            clock,
-            record.payload.clone(),
-        )
-    }
-
-    fn provider_output_event(
-        &mut self,
-        output: &ProviderOutputRecord,
-        clock: &TurnCoordinatorClock,
-    ) -> SessionEvent {
-        self.session_event(
-            output.kind.session_event_kind(),
-            clock,
-            output.payload.clone(),
-        )
-    }
-
-    fn turn_terminal_event(
-        &mut self,
-        input: &InputEvent,
-        turn_id: &str,
-        record: &ProviderDispatchRecord,
-        clock: &TurnCoordinatorClock,
-    ) -> SessionEvent {
-        let (kind, terminal_status) = provider_status_to_turn_terminal(&record.status);
-        let error_summary = provider_terminal_error_summary(&kind, terminal_status, record);
-        self.session_event(
-            kind,
-            clock,
-            create_turn_terminal_payload(
-                turn_id,
-                Some(&input.event_id),
-                record.status.as_str(),
-                terminal_status,
-                record.provider_execution_enabled,
-                error_summary.as_deref(),
-            ),
-        )
-    }
-
     fn session_event(
         &mut self,
         kind: SessionEventKind,
@@ -404,7 +351,6 @@ fn run_turn_worker(
         result,
     }
 }
-
 fn run_turn_worker_inner(
     provider_adapter: &mut dyn ProviderAdapter,
     provider_tool_call_executor: &mut dyn ProviderToolCallExecutor,
@@ -416,8 +362,15 @@ fn run_turn_worker_inner(
     next_event_index: &mut u64,
     cancellation: &ProviderCancellationToken,
 ) -> Result<CompletedTurn, String> {
-    let provider_request_written =
-        if let Some(start_record) = provider_adapter.dispatch_start_record(&input, &turn_id) {
+    const MAX_PROVIDER_FOLLOW_UP_ROUNDS: usize = 4;
+    let mut current_input = input.clone();
+    let mut output_evidence_count = 0usize;
+    let mut final_provider_record: Option<ProviderDispatchRecord> = None;
+
+    for round in 0..=MAX_PROVIDER_FOLLOW_UP_ROUNDS {
+        let provider_request_written = if let Some(start_record) =
+            provider_adapter.dispatch_start_record(&current_input, &turn_id)
+        {
             let provider_request = session_event_with_index(
                 evidence_context,
                 SessionEventKind::ProviderRequestRecorded,
@@ -431,49 +384,71 @@ fn run_turn_worker_inner(
             false
         };
 
-    let mut streaming_sink = TurnProviderOutputSink {
-        evidence_context,
-        session_jsonl_path,
-        clock,
-        next_event_index,
-        provider_tool_call_executor,
-        evidence_written: 0,
-    };
-    let provider_record = provider_adapter.dispatch_request_streaming(
-        &input,
-        &turn_id,
-        cancellation,
-        &mut streaming_sink,
-    );
-    let mut output_evidence_count = streaming_sink.evidence_written;
-    drop(streaming_sink);
-    if !provider_request_written {
-        let provider_request = session_event_with_index(
-            evidence_context,
-            SessionEventKind::ProviderRequestRecorded,
-            clock,
-            provider_record.payload.clone(),
-            next_event_index,
-        );
-        append_session_event(session_jsonl_path, &provider_request)?;
-    }
-    for output in &provider_record.outputs {
-        let output_event = session_event_with_index(
-            evidence_context,
-            output.kind.session_event_kind(),
-            clock,
-            output.payload.clone(),
-            next_event_index,
-        );
-        append_session_event(session_jsonl_path, &output_event)?;
-        output_evidence_count += 1;
-        output_evidence_count += provider_tool_call_executor.handle_provider_output(
-            output,
+        let mut streaming_sink = TurnProviderOutputSink {
             evidence_context,
             session_jsonl_path,
             clock,
-        )?;
+            next_event_index,
+            provider_tool_call_executor,
+            evidence_written: 0,
+            follow_up_texts: Vec::new(),
+        };
+        let provider_record = provider_adapter.dispatch_request_streaming(
+            &current_input,
+            &turn_id,
+            cancellation,
+            &mut streaming_sink,
+        );
+        output_evidence_count += streaming_sink.evidence_written;
+        let mut follow_up_texts = std::mem::take(&mut streaming_sink.follow_up_texts);
+        drop(streaming_sink);
+
+        if !provider_request_written {
+            let provider_request = session_event_with_index(
+                evidence_context,
+                SessionEventKind::ProviderRequestRecorded,
+                clock,
+                provider_record.payload.clone(),
+                next_event_index,
+            );
+            append_session_event(session_jsonl_path, &provider_request)?;
+        }
+        if round > 0 {
+            output_evidence_count += 1;
+        }
+        for output in &provider_record.outputs {
+            let output_event = session_event_with_index(
+                evidence_context,
+                output.kind.session_event_kind(),
+                clock,
+                output.payload.clone(),
+                next_event_index,
+            );
+            append_session_event(session_jsonl_path, &output_event)?;
+            output_evidence_count += 1;
+            let tool_execution = provider_tool_call_executor.handle_provider_output(
+                output,
+                evidence_context,
+                session_jsonl_path,
+                clock,
+            )?;
+            output_evidence_count += tool_execution.evidence_written;
+            if let Some(text) = tool_execution.follow_up_text {
+                follow_up_texts.push(text);
+            }
+        }
+
+        let has_follow_up = !follow_up_texts.is_empty()
+            && matches!(provider_record.status, ProviderDispatchStatus::Completed);
+        final_provider_record = Some(provider_record);
+        if !has_follow_up || round == MAX_PROVIDER_FOLLOW_UP_ROUNDS {
+            break;
+        }
+        current_input = provider_follow_up_input(&input, round + 1, &follow_up_texts);
     }
+
+    let provider_record = final_provider_record
+        .ok_or_else(|| "turn_provider_follow_up_record_missing".to_string())?;
     let (terminal_kind, terminal_status) =
         provider_status_to_turn_terminal(&provider_record.status);
     let error_summary =
@@ -500,6 +475,22 @@ fn run_turn_worker_inner(
     })
 }
 
+fn provider_follow_up_input(
+    original: &InputEvent,
+    round: usize,
+    follow_up_texts: &[String],
+) -> InputEvent {
+    let tool_results = follow_up_texts.join("\n\n");
+    let mut follow_up = original.clone();
+    follow_up.event_id = format!("{}_provider_follow_up_{round}", original.event_id);
+    follow_up.content = format!(
+        "Original operator input:\n{}\n\nMCP tool result(s):\n{}\n\nContinue the same turn. Use the tool result(s) to answer the operator. Do not repeat the same tool call unless another tool call is required by the result.",
+        original.content.trim(),
+        tool_results.trim()
+    );
+    follow_up
+}
+
 struct TurnProviderOutputSink<'a> {
     evidence_context: &'a SessionEvidenceContext,
     session_jsonl_path: &'a Path,
@@ -507,6 +498,7 @@ struct TurnProviderOutputSink<'a> {
     next_event_index: &'a mut u64,
     provider_tool_call_executor: &'a mut dyn ProviderToolCallExecutor,
     evidence_written: usize,
+    follow_up_texts: Vec<String>,
 }
 
 impl ProviderOutputSink for TurnProviderOutputSink<'_> {
@@ -520,12 +512,16 @@ impl ProviderOutputSink for TurnProviderOutputSink<'_> {
         );
         append_session_event(self.session_jsonl_path, &output_event)?;
         self.evidence_written += 1;
-        self.evidence_written += self.provider_tool_call_executor.handle_provider_output(
+        let tool_execution = self.provider_tool_call_executor.handle_provider_output(
             &output,
             self.evidence_context,
             self.session_jsonl_path,
             self.clock,
         )?;
+        self.evidence_written += tool_execution.evidence_written;
+        if let Some(text) = tool_execution.follow_up_text {
+            self.follow_up_texts.push(text);
+        }
         Ok(())
     }
 }
@@ -605,7 +601,7 @@ mod tests {
     use crate::provider_runtime_config::ProviderRuntimeConfig;
     use serde_json::json;
     use std::fs::{read_to_string, remove_file};
-    use std::sync::mpsc;
+    use std::sync::{Mutex, mpsc};
     use std::thread;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -815,9 +811,9 @@ mod tests {
             context: &SessionEvidenceContext,
             session_jsonl_path: &Path,
             clock: &TurnCoordinatorClock,
-        ) -> Result<usize, String> {
+        ) -> Result<ProviderToolCallExecution, String> {
             if output.kind != crate::provider_dispatch::ProviderOutputKind::ToolCallRequest {
-                return Ok(0);
+                return Ok(ProviderToolCallExecution::default());
             }
             let request = SessionEvent {
                 schema: SESSION_EVENT_SCHEMA.to_string(),
@@ -852,7 +848,12 @@ mod tests {
             };
             append_session_event(session_jsonl_path, &request)?;
             append_session_event(session_jsonl_path, &result)?;
-            Ok(2)
+            Ok(ProviderToolCallExecution {
+                evidence_written: 2,
+                follow_up_text: Some(
+                    "Tool result for site_loop_run_once from test: ok.\nok".to_string(),
+                ),
+            })
         }
     }
     fn scripted_output_provider_adapter() -> ScriptedProviderAdapter {
@@ -881,6 +882,76 @@ mod tests {
             ],
         )
         .expect("scripted provider adapter admits configured runtime")
+    }
+
+    struct ToolThenFinalProviderAdapter {
+        calls: Mutex<usize>,
+    }
+
+    impl ToolThenFinalProviderAdapter {
+        fn new() -> Self {
+            Self {
+                calls: Mutex::new(0),
+            }
+        }
+    }
+
+    impl ProviderAdapter for ToolThenFinalProviderAdapter {
+        fn dispatch_request(
+            &self,
+            input: &InputEvent,
+            turn_id: &str,
+            _cancellation: &ProviderCancellationToken,
+        ) -> ProviderDispatchRecord {
+            let mut calls = self.calls.lock().expect("call count lock works");
+            *calls += 1;
+            let payload = create_provider_request_payload(
+                turn_id,
+                &input.event_id,
+                "completed",
+                true,
+                "configured",
+                "admitted",
+                Some("test_tool_then_final_adapter".to_string()),
+                None,
+                None,
+                None,
+                true,
+                "single_provider_output_batch",
+                None,
+                &input.content,
+            );
+            if *calls == 1 {
+                return ProviderDispatchRecord {
+                    status: ProviderDispatchStatus::Completed,
+                    provider_execution_enabled: true,
+                    payload,
+                    outputs: vec![ProviderOutputRecord::tool_call_request(
+                        turn_id,
+                        "site_loop_run_once",
+                        "{}",
+                        1,
+                    )],
+                };
+            }
+            assert!(
+                input.content.contains("MCP tool result(s):")
+                    && input
+                        .content
+                        .contains("Tool result for site_loop_run_once from test: ok."),
+                "follow-up provider input must include MCP tool result text"
+            );
+            ProviderDispatchRecord {
+                status: ProviderDispatchStatus::Completed,
+                provider_execution_enabled: true,
+                payload,
+                outputs: vec![ProviderOutputRecord::text_delta(
+                    turn_id,
+                    "Final answer from tool result.",
+                    1,
+                )],
+            }
+        }
     }
 
     #[test]
@@ -1228,7 +1299,7 @@ mod tests {
         let mut coordinator = TurnCoordinator::with_provider_adapter_and_tool_executor(
             &path,
             context(),
-            Box::new(scripted_output_provider_adapter()),
+            Box::new(ToolThenFinalProviderAdapter::new()),
             Box::new(WritingProviderToolCallExecutor),
         );
 
@@ -1236,25 +1307,42 @@ mod tests {
             .run_one_ready_turn(&mut queue, &clock())
             .expect("turn run succeeds")
             .expect("turn completed");
-        assert_eq!(completed.evidence_written, 7);
+        assert_eq!(completed.evidence_written, 8);
 
         let session_jsonl = read_to_string(&path).expect("session jsonl exists");
         let events = session_jsonl
             .lines()
             .map(|line| parse_session_event(line).expect("event parses"))
             .collect::<Vec<_>>();
-        assert_eq!(events.len(), 7);
+        assert_eq!(events.len(), 8);
         assert_eq!(
-            events[3].event_kind,
+            events[2].event_kind,
             SessionEventKind::ProviderToolCallRequested
         );
-        assert_eq!(events[4].event_kind, SessionEventKind::ToolCallRequested);
-        assert_eq!(events[5].event_kind, SessionEventKind::ToolResultReceived);
-        assert_eq!(events[6].event_kind, SessionEventKind::TurnCompleted);
+        assert_eq!(events[3].event_kind, SessionEventKind::ToolCallRequested);
+        assert_eq!(events[4].event_kind, SessionEventKind::ToolResultReceived);
+        assert_eq!(
+            events[5].event_kind,
+            SessionEventKind::ProviderRequestRecorded
+        );
+        assert!(
+            events[5].payload["content_preview"]
+                .as_str()
+                .expect("follow-up preview is text")
+                .contains("MCP tool result(s):")
+        );
+        assert_eq!(
+            events[6].event_kind,
+            SessionEventKind::ProviderTextDeltaRecorded
+        );
+        assert_eq!(
+            events[6].payload["text_delta"],
+            "Final answer from tool result."
+        );
+        assert_eq!(events[7].event_kind, SessionEventKind::TurnCompleted);
 
         remove_file(path).ok();
     }
-
     #[test]
     fn drains_ready_input_and_writes_turn_evidence() {
         let path = temp_session_path();

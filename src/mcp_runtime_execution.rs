@@ -27,12 +27,15 @@ pub struct McpRuntimeExecutionClock {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpRuntimeExecutionResult {
     pub server_name: String,
+    pub tool_name: String,
+    pub status: String,
+    pub result_summary: String,
+    pub result_text: Option<String>,
     pub request_evidence_written: bool,
     pub result_evidence_written: bool,
     pub recovery_evidence_written: bool,
     pub supervisor_state: McpProcessSupervisorState,
 }
-
 pub struct McpRuntimeExecutionBridge<E: McpRuntimeToolExecutor> {
     evidence_context: SessionEvidenceContext,
     session_jsonl_path: PathBuf,
@@ -103,9 +106,13 @@ impl<E: McpRuntimeToolExecutor> McpRuntimeExecutionBridge<E> {
                 self.write_evidence(&result_event)?;
                 let state = self
                     .supervisor_mut(&prepared.server_name)
-                    .apply_successful_call(io_result);
+                    .apply_successful_call(io_result.clone());
                 Ok(McpRuntimeExecutionResult {
                     server_name: prepared.server_name.clone(),
+                    tool_name: io_result.tool_result.tool_name.clone(),
+                    status: io_result.tool_result.status.clone(),
+                    result_summary: io_result.tool_result.result_summary.clone(),
+                    result_text: io_result.tool_result.result_text.clone(),
                     request_evidence_written: true,
                     result_evidence_written: true,
                     recovery_evidence_written: false,
@@ -126,6 +133,13 @@ impl<E: McpRuntimeToolExecutor> McpRuntimeExecutionBridge<E> {
                 self.write_evidence(&diagnostic)?;
                 Ok(McpRuntimeExecutionResult {
                     server_name: prepared.server_name.clone(),
+                    tool_name: prepared.tool_name.clone(),
+                    status: "error".to_string(),
+                    result_summary: snapshot
+                        .last_error
+                        .clone()
+                        .unwrap_or_else(|| "mcp_tool_call_failed".to_string()),
+                    result_text: None,
                     request_evidence_written: true,
                     result_evidence_written: false,
                     recovery_evidence_written: true,

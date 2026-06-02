@@ -10,7 +10,8 @@ use crate::mcp_runtime_execution::{
 };
 use crate::provider_dispatch::{ProviderOutputKind, ProviderOutputRecord};
 use crate::turn_coordinator::{
-    NoopProviderToolCallExecutor, ProviderToolCallExecutor, TurnCoordinatorClock,
+    NoopProviderToolCallExecutor, ProviderToolCallExecution, ProviderToolCallExecutor,
+    TurnCoordinatorClock,
 };
 use serde_json::{Value, json};
 use std::path::Path;
@@ -55,7 +56,7 @@ impl<E: McpRuntimeToolExecutor> ProviderToolCallExecutor for SupervisedProviderT
         context: &SessionEvidenceContext,
         _session_jsonl_path: &Path,
         clock: &TurnCoordinatorClock,
-    ) -> Result<usize, String> {
+    ) -> Result<ProviderToolCallExecution, String> {
         let runtime_clock = McpRuntimeExecutionClock {
             occurred_at: clock.occurred_at.clone(),
             event_id_prefix: format!("{}_provider_tool", clock.event_id_prefix),
@@ -70,19 +71,40 @@ impl<E: McpRuntimeToolExecutor> ProviderToolCallExecutor for SupervisedProviderT
             &runtime_clock,
         )?;
         Ok(match result.status {
-            ProviderToolCallBridgeStatus::IgnoredNonToolOutput => 0,
+            ProviderToolCallBridgeStatus::IgnoredNonToolOutput => {
+                ProviderToolCallExecution::default()
+            }
             ProviderToolCallBridgeStatus::Executed => result
                 .mcp_result
-                .map(|mcp_result| {
-                    mcp_result.request_evidence_written as usize
-                        + mcp_result.result_evidence_written as usize
-                        + mcp_result.recovery_evidence_written as usize
-                })
-                .unwrap_or(0),
+                .map(provider_tool_follow_up)
+                .unwrap_or_default(),
         })
     }
 }
 
+fn provider_tool_follow_up(mcp_result: McpRuntimeExecutionResult) -> ProviderToolCallExecution {
+    let evidence_written = mcp_result.request_evidence_written as usize
+        + mcp_result.result_evidence_written as usize
+        + mcp_result.recovery_evidence_written as usize;
+    let follow_up_text = Some(format_tool_follow_up(&mcp_result));
+    ProviderToolCallExecution {
+        evidence_written,
+        follow_up_text,
+    }
+}
+
+fn format_tool_follow_up(result: &McpRuntimeExecutionResult) -> String {
+    let body = result
+        .result_text
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .unwrap_or(result.result_summary.as_str());
+    format!(
+        "Tool result for {} from {}: {}.\n{}",
+        result.tool_name, result.server_name, result.status, body
+    )
+}
 pub fn provider_tool_call_executor_from_mcp_runtime_config(
     session_jsonl_path: impl AsRef<Path>,
     evidence_context: SessionEvidenceContext,
@@ -374,7 +396,8 @@ mod tests {
             )
             .expect("noop handles provider output");
 
-        assert_eq!(written, 0);
+        assert_eq!(written.evidence_written, 0);
+        assert!(written.follow_up_text.is_none());
         assert!(!path.exists());
     }
 
@@ -421,7 +444,8 @@ mod tests {
             )
             .expect("non-tool output is ignored without spawning");
 
-        assert_eq!(written, 0);
+        assert_eq!(written.evidence_written, 0);
+        assert!(written.follow_up_text.is_none());
         let _ = remove_file(config_path);
         let _ = remove_file(session_path);
     }
@@ -531,7 +555,11 @@ mod tests {
             .handle_provider_output(&output, &context(), &path, &turn_clock)
             .expect("provider tool output writes evidence");
 
-        assert_eq!(written, 2);
+        assert_eq!(written.evidence_written, 2);
+        assert_eq!(
+            written.follow_up_text.as_deref(),
+            Some("Tool result for site_loop_run_once from sonar-site-loop: ok.\nstartup ok")
+        );
         let contents = read_to_string(&path).expect("session jsonl exists");
         let events = contents
             .lines()
