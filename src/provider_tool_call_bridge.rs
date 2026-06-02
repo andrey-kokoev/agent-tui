@@ -348,6 +348,7 @@ mod tests {
                     status: "ok".to_string(),
                     duration_ms: 10,
                     result_summary: "content_items=1".to_string(),
+                    result_text: Some("startup ok".to_string()),
                     result_ref: None,
                 },
                 response_line: "{}".to_string(),

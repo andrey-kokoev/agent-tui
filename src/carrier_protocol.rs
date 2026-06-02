@@ -548,6 +548,7 @@ fn validate_tool_result_payload(payload: &Value) -> Result<(), String> {
     require_payload_nonempty_string(payload, "status")?;
     require_payload_nonnegative_number(payload, "duration_ms")?;
     require_payload_string(payload, "result_summary")?;
+    require_optional_string(payload, "result_text")?;
     validate_optional_payload_ref(payload, "result_ref")
 }
 

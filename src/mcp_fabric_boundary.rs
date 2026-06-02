@@ -47,6 +47,7 @@ pub struct McpToolResult {
     pub status: String,
     pub duration_ms: u64,
     pub result_summary: String,
+    pub result_text: Option<String>,
     pub result_ref: Option<PayloadRef>,
 }
 
@@ -294,6 +295,7 @@ mod tests {
                     status: "ok".to_string(),
                     duration_ms: 42,
                     result_summary: "loop pass complete".to_string(),
+                    result_text: None,
                     result_ref: None,
                 },
                 &context(),

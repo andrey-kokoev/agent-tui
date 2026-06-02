@@ -252,6 +252,11 @@ fn project_tool_result_received(event: &SessionEvent) -> Option<TranscriptItem> 
             .unwrap_or("")
             .to_string()
     });
+    let result_text = event
+        .payload
+        .get("result_text")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty());
     Some(TranscriptItem {
         kind: TranscriptItemKind::ToolResultReceived,
         actor: TranscriptActor::AgentTui,
@@ -261,7 +266,7 @@ fn project_tool_result_received(event: &SessionEvent) -> Option<TranscriptItem> 
             .and_then(|value| value.as_str())
             .unwrap_or("")
             .to_string(),
-        text: tool_result_text(status, tool_name, duration_ms, &result_summary),
+        text: tool_result_text(status, tool_name, duration_ms, &result_summary, result_text),
         sequence: None,
         projection_key: None,
         occurred_at: Some(event.occurred_at.clone()),
@@ -273,13 +278,18 @@ fn tool_result_text(
     tool_name: &str,
     duration_ms: u64,
     result_summary: &str,
+    result_text: Option<&str>,
 ) -> String {
     let base = format!("{status} {tool_name} in {duration_ms}ms");
     let summary = result_summary.trim();
-    if summary.is_empty() {
+    let header = if summary.is_empty() {
         base
     } else {
         format!("{base} · {summary}")
+    };
+    match result_text.map(str::trim).filter(|text| !text.is_empty()) {
+        Some(text) => format!("{header}\n{text}"),
+        None => header,
     }
 }
 
@@ -643,6 +653,27 @@ mod tests {
         assert_eq!(
             item.occurred_at.as_deref(),
             Some("2026-05-30T00:00:00.000Z")
+        );
+    }
+
+    #[test]
+    fn projects_tool_result_text_after_summary() {
+        let item = project_session_event(&event(
+            SessionEventKind::ToolResultReceived,
+            json!({
+                "tool_name": "startup_sequence",
+                "status": "ok",
+                "duration_ms": 4,
+                "result_summary": "content_items=1",
+                "result_text": "Startup sequence completed for sonar.resident.",
+                "result_ref": null
+            }),
+        ))
+        .expect("projection exists");
+
+        assert_eq!(
+            item.text,
+            "ok startup_sequence in 4ms · content_items=1\nStartup sequence completed for sonar.resident."
         );
     }
 

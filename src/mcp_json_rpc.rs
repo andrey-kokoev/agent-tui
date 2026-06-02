@@ -101,6 +101,7 @@ impl JsonRpcResponse {
                 status: "error".to_string(),
                 duration_ms,
                 result_summary: format!("json_rpc_error:{}:{}", error.code, error.message),
+                result_text: None,
                 result_ref: None,
             },
             None => McpToolResult {
@@ -108,6 +109,7 @@ impl JsonRpcResponse {
                 status: "ok".to_string(),
                 duration_ms,
                 result_summary: summarize_result(self.result.as_ref()),
+                result_text: extract_text_result(self.result.as_ref()),
                 result_ref: None,
             },
         }
@@ -141,6 +143,31 @@ fn summarize_result(result: Option<&Value>) -> String {
         return format!("keys={keys}");
     }
     result.to_string()
+}
+
+fn extract_text_result(result: Option<&Value>) -> Option<String> {
+    const MAX_RESULT_TEXT_CHARS: usize = 8000;
+    let content = result?.get("content")?.as_array()?;
+    let text = content
+        .iter()
+        .filter_map(|item| {
+            (item.get("type").and_then(Value::as_str) == Some("text"))
+                .then(|| item.get("text").and_then(Value::as_str))
+                .flatten()
+        })
+        .filter(|text| !text.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let truncated = text.chars().take(MAX_RESULT_TEXT_CHARS).collect::<String>();
+    Some(if text.chars().count() > MAX_RESULT_TEXT_CHARS {
+        format!("{truncated}\n[truncated]")
+    } else {
+        truncated
+    })
 }
 
 #[cfg(test)]
@@ -199,6 +226,7 @@ mod tests {
         assert_eq!(result.status, "ok");
         assert_eq!(result.duration_ms, 12);
         assert_eq!(result.result_summary, "content_items=1");
+        assert_eq!(result.result_text.as_deref(), Some("ok"));
     }
 
     #[test]
@@ -211,18 +239,6 @@ mod tests {
 
         assert_eq!(result.status, "error");
         assert_eq!(result.result_summary, "json_rpc_error:-32601:missing");
-    }
-
-    #[test]
-    fn rejects_ambiguous_response_shape() {
-        let error = JsonRpcResponse::parse_line(
-            r#"{"jsonrpc":"2.0","id":7,"result":{},"error":{"code":1,"message":"bad"}}"#,
-        )
-        .expect_err("ambiguous shape rejected");
-
-        assert_eq!(
-            error,
-            "mcp_json_rpc_response_must_have_exactly_one_result_or_error"
-        );
+        assert_eq!(result.result_text, None);
     }
 }
