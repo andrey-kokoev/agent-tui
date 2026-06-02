@@ -15,8 +15,7 @@ use crate::terminal_runtime_config::TerminalRuntimeConfig;
 use crate::transcript_projection::{TranscriptItem, TranscriptItemKind};
 use crate::transcript_store::{TranscriptIngestSummary, TranscriptStore};
 use crate::turn_coordinator::{
-    NoopProviderToolCallExecutor, ProviderToolCallExecution, ProviderToolCallExecutor,
-    TurnCoordinator, TurnCoordinatorClock,
+    NoopProviderToolCallExecutor, ProviderToolCallExecutor, TurnCoordinator, TurnCoordinatorClock,
 };
 use std::path::PathBuf;
 
@@ -416,6 +415,7 @@ mod tests {
     use crate::session_jsonl::append_session_event;
     use crate::terminal_runtime_config::TerminalRuntimeConfig;
     use crate::terminal_runtime_contract::terminal_runtime_contract;
+    use crate::turn_coordinator::ProviderToolCallExecution;
     use serde_json::json;
     use std::collections::BTreeMap;
     use std::fs::{OpenOptions, read_to_string, remove_file};

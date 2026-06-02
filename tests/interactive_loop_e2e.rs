@@ -28,6 +28,7 @@ use std::collections::VecDeque;
 use std::fs::{OpenOptions, remove_file, write};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy)]
@@ -38,13 +39,15 @@ struct ToolScenario {
     tool_name: &'static str,
     arguments_summary: &'static str,
     result_summary: &'static str,
+    result_text: &'static str,
     expected_operator_line: &'static str,
     expected_tool_request_line: &'static str,
     expected_tool_result_line: &'static str,
+    expected_final_agent_line: &'static str,
 }
-
 struct ScenarioProvider {
     scenario: ToolScenario,
+    calls: Mutex<usize>,
 }
 
 impl ProviderAdapter for ScenarioProvider {
@@ -54,29 +57,55 @@ impl ProviderAdapter for ScenarioProvider {
         turn_id: &str,
         _cancellation: &ProviderCancellationToken,
     ) -> ProviderDispatchRecord {
+        let mut calls = self
+            .calls
+            .lock()
+            .expect("scenario provider call lock works");
+        *calls += 1;
+        let payload = create_provider_request_payload(
+            turn_id,
+            &input.event_id,
+            "completed",
+            true,
+            "configured",
+            "admitted",
+            Some("test_scenario_provider".to_string()),
+            None,
+            None,
+            None,
+            false,
+            "single_provider_output_batch",
+            None,
+            &input.content,
+        );
+        if *calls == 1 {
+            return ProviderDispatchRecord {
+                status: ProviderDispatchStatus::Completed,
+                provider_execution_enabled: true,
+                payload,
+                outputs: vec![ProviderOutputRecord::tool_call_request(
+                    turn_id,
+                    self.scenario.tool_name,
+                    self.scenario.arguments_summary,
+                    1,
+                )],
+            };
+        }
+        assert!(
+            input.content.contains("MCP tool result(s):")
+                && input.content.contains(self.scenario.result_text),
+            "provider follow-up input must include MCP result text"
+        );
         ProviderDispatchRecord {
             status: ProviderDispatchStatus::Completed,
             provider_execution_enabled: true,
-            payload: create_provider_request_payload(
+            payload,
+            outputs: vec![ProviderOutputRecord::text_delta(
                 turn_id,
-                &input.event_id,
-                "completed",
-                true,
-                "configured",
-                "admitted",
-                Some("test_scenario_provider".to_string()),
-                None,
-                None,
-                None,
-                false,
-                "single_provider_output_batch",
-                None,
-                &input.content,
-            ),
-            outputs: vec![ProviderOutputRecord::tool_call_request(
-                turn_id,
-                self.scenario.tool_name,
-                self.scenario.arguments_summary,
+                self.scenario
+                    .expected_final_agent_line
+                    .strip_prefix("sonar.resident: ")
+                    .unwrap_or(self.scenario.expected_final_agent_line),
                 1,
             )],
         }
@@ -107,6 +136,7 @@ impl McpRuntimeToolExecutor for SuccessfulScenarioMcpExecutor {
                 status: "ok".to_string(),
                 duration_ms: 10,
                 result_summary: self.scenario.result_summary.to_string(),
+                result_text: Some(self.scenario.result_text.to_string()),
                 result_ref: None,
             },
             response_line: "{}".to_string(),
@@ -183,9 +213,11 @@ fn final_frame_contains_operator_agent_tool_result_and_completion_for_startup_se
         tool_name: "startup_sequence",
         arguments_summary: "{}",
         result_summary: "content_items=1",
+        result_text: "Startup sequence completed for sonar.resident.",
         expected_operator_line: "operator -> sonar.resident: run startup sequence",
         expected_tool_request_line: "sonar.resident -> agent-tui: startup_sequence({})",
         expected_tool_result_line: "agent-tui -> sonar.resident: ok startup_sequence in 10ms · content_items=1",
+        expected_final_agent_line: "sonar.resident: Startup sequence completed for sonar.resident.",
     });
 }
 
@@ -198,9 +230,11 @@ fn final_frame_contains_fs_mcp_tool_result() {
         tool_name: "fs_read_file",
         arguments_summary: "{\"path\":\"D:/code/narada.sonar/README.md\",\"limit\":20}",
         result_summary: "content: README.md lines 1-20",
+        result_text: "README.md first twenty lines are available.",
         expected_operator_line: "operator -> sonar.resident: read README through filesystem MCP",
         expected_tool_request_line: "sonar.resident -> agent-tui: fs_read_file({\"path\":\"D:/code/narada.sonar/README.md\",\"limit\":20})",
         expected_tool_result_line: "agent-tui -> sonar.resident: ok fs_read_file in 10ms · content: README.md lines 1-20",
+        expected_final_agent_line: "sonar.resident: README.md first twenty lines are available.",
     });
 }
 
@@ -213,9 +247,11 @@ fn final_frame_contains_structured_command_mcp_tool_result() {
         tool_name: "structured_command_execute",
         arguments_summary: "{\"command\":\"cargo\",\"args\":[\"--version\"]}",
         result_summary: "exit_code=0 stdout=cargo 1.x",
+        result_text: "cargo 1.x executed successfully.",
         expected_operator_line: "operator -> sonar.resident: run cargo version through structured command MCP",
         expected_tool_request_line: "sonar.resident -> agent-tui: structured_command_execute({\"command\":\"cargo\",\"args\":[\"--version\"]})",
         expected_tool_result_line: "agent-tui -> sonar.resident: ok structured_command_execute in 10ms · exit_code=0 stdout=cargo 1.x",
+        expected_final_agent_line: "sonar.resident: cargo 1.x executed successfully.",
     });
 }
 
@@ -230,7 +266,10 @@ fn run_final_frame_tool_scenario(scenario: ToolScenario) {
         &control_path,
         &session_path,
         context.clone(),
-        Box::new(ScenarioProvider { scenario }),
+        Box::new(ScenarioProvider {
+            scenario,
+            calls: Mutex::new(0),
+        }),
         provider_tool_executor(&session_path, context, scenario),
         RuntimePostureState::disabled(),
     );
@@ -268,6 +307,7 @@ fn run_final_frame_tool_scenario(scenario: ToolScenario) {
             scenario.expected_operator_line,
             scenario.expected_tool_request_line,
             scenario.expected_tool_result_line,
+            scenario.expected_final_agent_line,
             "agent-tui: completed",
         ],
     );
@@ -356,15 +396,27 @@ fn assert_ordered_subsequence(actual: &[String], expected: &[&str]) {
     for expected_line in expected {
         let Some(relative_index) = actual[cursor..]
             .iter()
-            .position(|line| line == expected_line)
+            .position(|line| row_matches_expected(line, expected_line))
         else {
             panic!(
-                "expected line not found after index {cursor}: {expected_line}\nactual frame:\n{}",
-                actual.join("\n")
+                "expected line not found after index {cursor}: {expected_line:?}\nactual frame:\n{}",
+                actual
+                    .iter()
+                    .map(|line| format!("{line:?}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
             );
         };
         cursor += relative_index + 1;
     }
+}
+
+fn row_matches_expected(actual: &str, expected: &str) -> bool {
+    actual == expected
+        || actual
+            .split('\n')
+            .next()
+            .is_some_and(|line| line == expected)
 }
 
 fn write_guard_proof(scenario: ToolScenario, final_frame: &[String]) {
