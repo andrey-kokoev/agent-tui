@@ -919,6 +919,7 @@ mod tests {
         PROVIDER_OUTPUT_PAYLOAD_SCHEMA, PROVIDER_REQUEST_PAYLOAD_SCHEMA, parse_input_event,
     };
     use crate::provider_adapter_contract::provider_adapter_contract;
+    use crate::test_env_lock::ENV_LOCK;
     use std::collections::BTreeMap;
     use std::fs::{create_dir_all, remove_dir_all, write};
     use std::sync::{Arc, Mutex};
@@ -926,8 +927,6 @@ mod tests {
     use std::time::Duration;
 
     const INPUT_FIXTURE: &str = include_str!("../carrier-protocol/fixtures/input-event.json");
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
     fn set_test_env_var(key: &str, value: impl AsRef<std::ffi::OsStr>) {
         // Tests that mutate process environment hold ENV_LOCK, so no other test in
         // this module observes a partially-restored provider runtime environment.
@@ -946,6 +945,12 @@ mod tests {
             .first()
             .expect("provider contract has at least one admitted provider")
             .as_str()
+    }
+
+    fn provider_process_input() -> InputEvent {
+        let mut input = parse_input_event(INPUT_FIXTURE).expect("input parses");
+        input.content = "answer with provider text".to_string();
+        input
     }
 
     fn provider_runtime_env(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
@@ -1206,7 +1211,7 @@ mod tests {
     #[test]
     fn provider_adapter_factory_dispatches_admitted_production_adapter() {
         let _guard = ENV_LOCK.lock().expect("provider env lock");
-        let input = parse_input_event(INPUT_FIXTURE).expect("input parses");
+        let input = provider_process_input();
         let runtime_config = ProviderRuntimeConfig::from_env_map(&provider_runtime_env(&[
             ("execution_enabled", "true"),
             ("provider", admitted_provider()),
@@ -1260,7 +1265,7 @@ mod tests {
     #[test]
     fn codex_subscription_adapter_interrupts_spawned_provider_process() {
         let _guard = ENV_LOCK.lock().expect("provider env lock");
-        let input = parse_input_event(INPUT_FIXTURE).expect("input parses");
+        let input = provider_process_input();
         let runtime_config = ProviderRuntimeConfig::from_env_map(&provider_runtime_env(&[
             ("execution_enabled", "true"),
             ("provider", admitted_provider()),
@@ -1322,7 +1327,7 @@ mod tests {
     #[test]
     fn codex_subscription_adapter_streams_json_line_text_deltas_to_sink() {
         let _guard = ENV_LOCK.lock().expect("provider env lock");
-        let input = parse_input_event(INPUT_FIXTURE).expect("input parses");
+        let input = provider_process_input();
         let runtime_config = ProviderRuntimeConfig::from_env_map(&provider_runtime_env(&[
             ("execution_enabled", "true"),
             ("provider", admitted_provider()),
@@ -1385,7 +1390,7 @@ mod tests {
     #[test]
     fn codex_subscription_adapter_streams_item_completed_before_process_exit() {
         let _guard = ENV_LOCK.lock().expect("provider env lock");
-        let input = parse_input_event(INPUT_FIXTURE).expect("input parses");
+        let input = provider_process_input();
         let runtime_config = ProviderRuntimeConfig::from_env_map(&provider_runtime_env(&[
             ("execution_enabled", "true"),
             ("provider", admitted_provider()),

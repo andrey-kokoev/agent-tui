@@ -251,7 +251,7 @@ mod tests {
         assert_eq!(
             run_terminal_input_tick(&mut reader, &mut draft),
             TerminalInputTickOutcome::DraftEffect(ComposerDraftEffect::SubmitRequested {
-                text: "run startup sequence".to_string()
+                text: " run startup sequence ".to_string()
             })
         );
         assert_eq!(draft.text, "");

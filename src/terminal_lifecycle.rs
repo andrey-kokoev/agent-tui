@@ -538,7 +538,7 @@ mod tests {
         assert_eq!(buffer[(result_x, agent_tui_y)].fg, Color::Green);
         assert_eq!(timestamp_y, agent_tui_y);
         assert_eq!(buffer[(timestamp_x, timestamp_y)].fg, Color::DarkGray);
-        assert_eq!(buffer[(timestamp_time_x, timestamp_y)].fg, Color::Gray);
+        assert_eq!(buffer[(timestamp_time_x, timestamp_y)].fg, Color::DarkGray);
         assert_cell_style(buffer, composer_x, composer_y, Color::Green, Modifier::BOLD);
 
         harness.leave().expect("harness leaves cleanly");

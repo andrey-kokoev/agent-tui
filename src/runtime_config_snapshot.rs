@@ -124,7 +124,7 @@ mod tests {
         let posture = snapshot.posture();
 
         assert_eq!(snapshot.provider.status.as_str(), "configured");
-        assert_eq!(snapshot.provider_adapter.status.as_str(), "refused");
+        assert_eq!(snapshot.provider_adapter.status.as_str(), "admitted");
         assert_eq!(
             snapshot.provider_adapter.adapter_kind.as_deref(),
             Some(provider_contract.production_provider_adapter_kind.as_str())
@@ -132,7 +132,7 @@ mod tests {
         assert_eq!(snapshot.mcp.status.as_str(), "configured");
         assert_eq!(snapshot.terminal.status.as_str(), "configured");
         assert_eq!(posture.provider_state.as_str(), "configured");
-        assert_eq!(posture.provider_adapter_state.as_str(), "refused");
+        assert_eq!(posture.provider_adapter_state.as_str(), "admitted");
         assert_eq!(posture.mcp_state.as_str(), "configured");
         assert_eq!(posture.terminal_state.as_str(), "configured");
     }

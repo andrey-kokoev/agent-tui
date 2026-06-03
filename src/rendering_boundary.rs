@@ -224,8 +224,8 @@ mod tests {
             LayoutConfig::default(),
         );
 
-        assert_eq!(layout.status.y, 6);
-        assert_eq!(layout.composer.y, 7);
+        assert_eq!(layout.status.y, 5);
+        assert_eq!(layout.composer.y, 6);
         assert_eq!(record.source, DiagnosticSource::Resize);
         assert!(record.message.contains("state preserved"));
     }

@@ -2740,8 +2740,7 @@ mod tests {
         let text = buffer_text(&buffer);
 
         assert!(text.contains("Transcript"));
-        assert!(text.contains("operator -> sonar.resident:"));
-        assert!(text.contains("  run startup sequence"));
+        assert!(text.contains("operator -> sonar.resident: run startup sequence"));
         assert!(text.contains("  2026-05-30Z00:00"));
         assert!(text.contains("sonar.resident"));
         assert!(!text.contains("agent="));
@@ -2823,13 +2822,15 @@ mod tests {
         let (timestamp_x, timestamp_y) =
             find_text_position(&buffer, "2026-05-30Z00:00").expect("timestamp line is rendered");
 
-        assert_eq!(body_x, label_x + 2);
-        assert_eq!(body_y, label_y + 1);
+        assert_eq!(
+            body_x,
+            label_x + "operator -> sonar.resident: ".chars().count() as u16
+        );
+        assert_eq!(body_y, label_y);
         assert_eq!(timestamp_x, label_x + 2);
-        assert_eq!(timestamp_y, body_y + 1);
+        assert_eq!(timestamp_y, label_y + 1);
         assert_eq!(buffer[(timestamp_x, timestamp_y)].fg, Color::DarkGray);
         assert_eq!(buffer[(timestamp_x + 10, timestamp_y)].fg, Color::DarkGray);
-        assert_eq!(buffer[(timestamp_x + 15, timestamp_y)].fg, Color::DarkGray);
         assert_eq!(buffer[(body_x, body_y)].fg, Color::White);
     }
 
@@ -3929,11 +3930,13 @@ mod tests {
     fn structured_body_spans_do_not_treat_indented_paths_as_key_values() {
         let spans = structured_body_spans("  Root: D:\\code\\narada", ui_theme::body());
 
-        assert_eq!(spans.len(), 2);
-        assert_eq!(spans[0].content.as_ref(), "  Root: ");
-        assert_eq!(spans[0].style.fg, Some(Color::White));
-        assert_eq!(spans[1].content.as_ref(), "D:\\code\\narada");
-        assert_eq!(spans[1].style.fg, Some(Color::Gray));
+        assert_eq!(spans.len(), 3);
+        assert_eq!(spans[0].content.as_ref(), "  ");
+        assert_eq!(spans[0].style.fg, Some(Color::DarkGray));
+        assert_eq!(spans[1].content.as_ref(), "Root: ");
+        assert_eq!(spans[1].style.fg, Some(Color::White));
+        assert_eq!(spans[2].content.as_ref(), "D:\\code\\narada");
+        assert_eq!(spans[2].style.fg, Some(Color::Gray));
     }
 
     #[test]

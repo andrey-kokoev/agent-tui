@@ -446,6 +446,7 @@ mod tests {
         ProviderAdapter, ProviderCancellationToken, ProviderDispatchRecord, ProviderDispatchStatus,
     };
     use crate::terminal_input_tick::TerminalInputReader;
+    use crate::test_env_lock::ENV_LOCK;
     use crate::transcript_store::TranscriptStore;
     use crate::turn_coordinator::TurnCoordinatorClock;
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
@@ -1433,6 +1434,7 @@ mod tests {
 
     #[test]
     fn injected_interactive_loop_accepts_real_terminal_key_events() {
+        let _guard = ENV_LOCK.lock().expect("test env lock");
         let control_path = temp_path("control-key-events");
         let session_path = temp_path("session-key-events");
         append(&control_path, "");
@@ -1485,6 +1487,7 @@ mod tests {
 
     #[test]
     fn injected_interactive_loop_accepts_operator_submit_and_later_control_input() {
+        let _guard = ENV_LOCK.lock().expect("test env lock");
         let control_path = temp_path("control-live-input");
         let session_path = temp_path("session-live-input");
         append(&control_path, "");
@@ -1678,6 +1681,7 @@ mod tests {
 
     #[test]
     fn injected_interactive_loop_recovers_from_malformed_control_jsonl() {
+        let _guard = ENV_LOCK.lock().expect("test env lock");
         let control_path = temp_path("control-malformed-recovery");
         let session_path = temp_path("session-malformed-recovery");
         append(&control_path, "{not valid json}\n");

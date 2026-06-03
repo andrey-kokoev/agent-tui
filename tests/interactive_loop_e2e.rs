@@ -28,8 +28,13 @@ use std::collections::VecDeque;
 use std::fs::{OpenOptions, remove_file, write};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{
+    Mutex,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static TEMP_PATH_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy)]
 struct ToolScenario {
@@ -439,7 +444,11 @@ fn temp_path(name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("clock works")
         .as_nanos();
-    std::env::temp_dir().join(format!("narada-agent-tui-e2e-{name}-{unique}.jsonl"))
+    let counter = TEMP_PATH_COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "narada-agent-tui-e2e-{name}-{}-{unique}-{counter}.jsonl",
+        std::process::id()
+    ))
 }
 
 fn append(path: &Path, content: &str) {
