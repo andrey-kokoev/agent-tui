@@ -45,7 +45,6 @@ struct ToolScenario {
     arguments_summary: &'static str,
     result_summary: &'static str,
     result_text: &'static str,
-    auto_reader_result_text: Option<&'static str>,
     expected_operator_line: &'static str,
     expected_tool_request_line: &'static str,
     expected_tool_result_line: &'static str,
@@ -103,15 +102,6 @@ impl ProviderAdapter for ScenarioProvider {
                 && input.content.contains(self.scenario.result_text),
             "provider follow-up input must include MCP result text"
         );
-        if let Some(auto_reader_result_text) = self.scenario.auto_reader_result_text {
-            assert!(
-                input
-                    .content
-                    .contains("Auto-read paged output via mcp_output_show")
-                    && input.content.contains(auto_reader_result_text),
-                "provider follow-up input must include auto-read MCP output"
-            );
-        }
         if let Some(expected_guidance) = self.scenario.expected_follow_up_guidance {
             assert!(
                 input.content.contains(expected_guidance),
@@ -144,30 +134,6 @@ impl McpRuntimeToolExecutor for SuccessfulScenarioMcpExecutor {
         prepared: &narada_agent_tui::mcp_fabric_transport::McpFabricPreparedToolCall,
     ) -> Result<McpStdioProcessIoResult, String> {
         assert_eq!(prepared.server_name, self.scenario.server_name);
-        if prepared.tool_name == "mcp_output_show" {
-            let result_text = self
-                .scenario
-                .auto_reader_result_text
-                .expect("paged scenario has auto-reader result text");
-            return Ok(McpStdioProcessIoResult {
-                server_name: prepared.server_name.clone(),
-                request_turn_id: prepared
-                    .request_event
-                    .payload
-                    .get("turn_id")
-                    .and_then(|value| value.as_str())
-                    .map(ToString::to_string),
-                tool_result: McpToolResult {
-                    tool_name: prepared.tool_name.clone(),
-                    status: "ok".to_string(),
-                    duration_ms: 10,
-                    result_summary: "narada.mcp_output_show.v1".to_string(),
-                    result_text: Some(result_text.to_string()),
-                    result_ref: None,
-                },
-                response_line: "{}".to_string(),
-            });
-        }
         assert_eq!(prepared.tool_name, self.scenario.tool_name);
         Ok(McpStdioProcessIoResult {
             server_name: prepared.server_name.clone(),
@@ -260,7 +226,6 @@ fn final_frame_contains_operator_agent_tool_result_and_completion_for_startup_se
         arguments_summary: "{}",
         result_summary: "content_items=1",
         result_text: "Startup sequence completed for sonar.resident.",
-        auto_reader_result_text: None,
         expected_operator_line: "operator -> sonar.resident: run startup sequence",
         expected_tool_request_line: "sonar.resident -> agent-tui: agent_context_startup_sequence({})",
         expected_tool_result_line: "agent-tui -> sonar.resident: ok agent_context_startup_sequence in 10ms · content_items=1",
@@ -279,14 +244,11 @@ fn final_frame_contains_answer_after_paged_startup_sequence_result() {
         arguments_summary: "{}",
         result_summary: "content_items=1",
         result_text: r#"{"status":"ok","truncated":true,"ref":"mcp_output:o_6cd77433e384445e976c7fdf","output_ref":"mcp_output:o_6cd77433e384445e976c7fdf","reader_tool":"mcp_output_show","inline_limit":200}"#,
-        auto_reader_result_text: Some(
-            r#"{"schema":"narada.mcp_output_show.v1","status":"ok","output_text":"Startup sequence completed for sonar.resident from full output."}"#,
-        ),
         expected_operator_line: "operator -> sonar.resident: run startup sequence",
         expected_tool_request_line: "sonar.resident -> agent-tui: agent_context_startup_sequence({})",
         expected_tool_result_line: "agent-tui -> sonar.resident: ok agent_context_startup_sequence in 10ms · content_items=1",
-        expected_final_agent_line: "sonar.resident: Startup sequence completed from auto-read paged output.",
-        expected_follow_up_guidance: Some("Auto-read paged output via mcp_output_show"),
+        expected_final_agent_line: "sonar.resident: Startup sequence completed; paged details were not accessible through the provider surface.",
+        expected_follow_up_guidance: Some("emit exactly this JSON tool-call envelope"),
     });
 }
 
@@ -300,7 +262,6 @@ fn final_frame_contains_fs_mcp_tool_result() {
         arguments_summary: "{\"path\":\"D:/code/narada.sonar/README.md\",\"limit\":20}",
         result_summary: "content: README.md lines 1-20",
         result_text: "README.md first twenty lines are available.",
-        auto_reader_result_text: None,
         expected_operator_line: "operator -> sonar.resident: read README through filesystem MCP",
         expected_tool_request_line: "sonar.resident -> agent-tui: fs_read_file({\"path\":\"D:/code/narada.sonar/README.md\",\"limit\":20})",
         expected_tool_result_line: "agent-tui -> sonar.resident: ok fs_read_file in 10ms · content: README.md lines 1-20",
@@ -319,7 +280,6 @@ fn final_frame_contains_structured_command_mcp_tool_result() {
         arguments_summary: "{\"command\":\"cargo\",\"args\":[\"--version\"]}",
         result_summary: "exit_code=0 stdout=cargo 1.x",
         result_text: "cargo 1.x executed successfully.",
-        auto_reader_result_text: None,
         expected_operator_line: "operator -> sonar.resident: run cargo version through structured command MCP",
         expected_tool_request_line: "sonar.resident -> agent-tui: structured_command_execute({\"command\":\"cargo\",\"args\":[\"--version\"]})",
         expected_tool_result_line: "agent-tui -> sonar.resident: ok structured_command_execute in 10ms · exit_code=0 stdout=cargo 1.x",
@@ -409,10 +369,6 @@ fn provider_tool_executor(
 }
 
 fn mcp_fabric_client(scenario: ToolScenario) -> McpFabricTransportClient {
-    let mut tools = vec![scenario.tool_name];
-    if scenario.auto_reader_result_text.is_some() {
-        tools.push("mcp_output_show");
-    }
     let config = json!({
         "site_id": "narada-sonar",
         "carrier": "agent-tui",
@@ -422,7 +378,7 @@ fn mcp_fabric_client(scenario: ToolScenario) -> McpFabricTransportClient {
                 "command": "node",
                 "args": ["fake-mcp-server.mjs"],
                 "target_site_root": "{site_root}",
-                "tools": tools
+                "tools": [scenario.tool_name]
             }
         }
     });
@@ -431,14 +387,10 @@ fn mcp_fabric_client(scenario: ToolScenario) -> McpFabricTransportClient {
 }
 
 fn mcp_boundary(scenario: ToolScenario) -> McpFabricBoundary {
-    let mut tools = vec![scenario.tool_name];
-    if scenario.auto_reader_result_text.is_some() {
-        tools.push("mcp_output_show");
-    }
     McpFabricBoundary::admitted(McpFabricPolicy::from_allowed_tools(
         "D:/code/narada.sonar/.ai/mcp",
         "fixture.mcp.json:mcpServers",
-        tools,
+        [scenario.tool_name],
     ))
 }
 
