@@ -572,6 +572,19 @@ impl CodexSubscriptionProviderAdapter {
 }
 
 fn direct_operator_intent_tool_call(content: &str) -> Option<(String, String)> {
+    if let Some(call) = parse_narada_tool_call(content) {
+        return Some(call);
+    }
+    if let Some(output_ref) = direct_mcp_output_reader_ref(content) {
+        return Some((
+            "mcp_output_show".to_string(),
+            json!({
+                "ref": output_ref,
+                "output_limit": 10000,
+            })
+            .to_string(),
+        ));
+    }
     let normalized = content
         .trim()
         .trim_end_matches('.')
@@ -585,6 +598,34 @@ fn direct_operator_intent_tool_call(content: &str) -> Option<(String, String)> {
             "{}".to_string(),
         )),
         _ => None,
+    }
+}
+
+fn direct_mcp_output_reader_ref(content: &str) -> Option<String> {
+    let lower = content.to_ascii_lowercase();
+    let asks_for_reader = lower.contains("mcp_output_show")
+        || lower.contains("output reader")
+        || lower.contains("startup output reader")
+        || lower.contains("read startup output")
+        || lower.contains("read the startup output")
+        || lower.contains("read the output ref");
+    if !asks_for_reader {
+        return None;
+    }
+    extract_mcp_output_ref(content)
+}
+
+fn extract_mcp_output_ref(content: &str) -> Option<String> {
+    let prefix = "mcp_output:";
+    let start = content.find(prefix)?;
+    let output_id = content[start + prefix.len()..]
+        .chars()
+        .take_while(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+        .collect::<String>();
+    if !output_id.is_empty() {
+        Some(format!("{prefix}{output_id}"))
+    } else {
+        None
     }
 }
 
@@ -1147,6 +1188,40 @@ mod tests {
             ))
         );
         assert_eq!(direct_operator_intent_tool_call("check startup docs"), None);
+    }
+
+    #[test]
+    fn routes_operator_pasted_narada_tool_call_directly() {
+        assert_eq!(
+            direct_operator_intent_tool_call(
+                r#"{"narada_tool_call":{"name":"mcp_output_show","arguments":{"ref":"mcp_output:o_98b8292361cf4937a6282193","output_limit":10000}}}"#
+            ),
+            Some((
+                "mcp_output_show".to_string(),
+                r#"{"output_limit":10000,"ref":"mcp_output:o_98b8292361cf4937a6282193"}"#
+                    .to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn routes_operator_reader_request_with_output_ref_directly() {
+        assert_eq!(
+            direct_operator_intent_tool_call(
+                "Call the startup output reader now for mcp_output:o_98b8292361cf4937a6282193."
+            ),
+            Some((
+                "mcp_output_show".to_string(),
+                r#"{"output_limit":10000,"ref":"mcp_output:o_98b8292361cf4937a6282193"}"#
+                    .to_string()
+            ))
+        );
+        assert_eq!(
+            direct_operator_intent_tool_call(
+                "Discuss mcp_output:o_98b8292361cf4937a6282193 generally"
+            ),
+            None
+        );
     }
 
     #[test]
