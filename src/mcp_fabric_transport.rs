@@ -293,7 +293,9 @@ fn materialize_server_env(
             .map(|(name, value)| (name.clone(), substitute_runtime_tokens(value, context))),
     );
     if let Some(configured_site_root) = env.get("NARADA_SITE_ROOT") {
-        if configured_site_root != output_store_site_root {
+        if normalize_site_root_for_comparison(configured_site_root)
+            != normalize_site_root_for_comparison(output_store_site_root)
+        {
             return Err(format!(
                 "mcp_fabric_server_site_root_mismatch:{}:{}:{}",
                 server.name, configured_site_root, output_store_site_root
@@ -306,6 +308,18 @@ fn materialize_server_env(
         );
     }
     Ok(env)
+}
+
+fn normalize_site_root_for_comparison(value: &str) -> String {
+    let mut normalized = value.trim().replace('\\', "/");
+    while normalized.len() > 1 && normalized.ends_with('/') {
+        normalized.pop();
+    }
+    #[cfg(windows)]
+    {
+        normalized = normalized.to_ascii_lowercase();
+    }
+    normalized
 }
 
 fn materialize_output_store_site_root(
@@ -1422,6 +1436,52 @@ mod tests {
         assert_eq!(
             error,
             "mcp_fabric_server_target_site_root_missing:sonar-site-loop"
+        );
+    }
+
+    #[test]
+    fn prepare_tool_call_accepts_equivalent_windows_site_root_spelling() {
+        let client = McpFabricTransportClient::from_json_str(
+            "fixture.mcp.json",
+            r#"{
+              "mcpServers": {
+                "sonar-site-loop": {
+                  "transport": "stdio",
+                  "command": "node",
+                  "env": {"NARADA_SITE_ROOT": "D:\\code\\narada.sonar"},
+                  "target_site_root": "D:/code/narada.sonar",
+                  "tools": ["site_loop_status"]
+                }
+              }
+            }"#,
+        )
+        .expect("config parses before admission");
+        let boundary = client.admitted_boundary(
+            "D:/code/narada.sonar/.ai/mcp",
+            "fixture.mcp.json:mcpServers",
+        );
+
+        let call = client
+            .prepare_tool_call(
+                &boundary,
+                &McpToolRequest {
+                    tool_name: "site_loop_status".to_string(),
+                    arguments_summary: "{}".to_string(),
+                    arguments_ref: None,
+                    requesting_agent_id: "sonar.resident".to_string(),
+                },
+                serde_json::json!({}),
+                7,
+                &context(),
+                "session_event_tool_request_1",
+                "2026-05-30T00:00:00.000Z",
+            )
+            .expect("equivalent site root spelling is accepted");
+
+        assert_eq!(call.output_store_site_root, "D:/code/narada.sonar");
+        assert_eq!(
+            call.env.get("NARADA_SITE_ROOT"),
+            Some(&"D:\\code\\narada.sonar".to_string())
         );
     }
 
