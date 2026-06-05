@@ -27,6 +27,7 @@ pub struct ProviderToolCallBridgeResult {
     pub status: ProviderToolCallBridgeStatus,
     pub tool_name: Option<String>,
     pub mcp_result: Option<McpRuntimeExecutionResult>,
+    pub auto_reader_result: Option<McpRuntimeExecutionResult>,
 }
 
 pub struct SupervisedProviderToolCallExecutor<E: McpRuntimeToolExecutor> {
@@ -76,30 +77,66 @@ impl<E: McpRuntimeToolExecutor> ProviderToolCallExecutor for SupervisedProviderT
             }
             ProviderToolCallBridgeStatus::Executed => result
                 .mcp_result
-                .map(provider_tool_follow_up)
+                .map(|mcp_result| provider_tool_follow_up(mcp_result, result.auto_reader_result))
                 .unwrap_or_default(),
         })
     }
 }
 
-fn provider_tool_follow_up(mcp_result: McpRuntimeExecutionResult) -> ProviderToolCallExecution {
-    let evidence_written = mcp_result.request_evidence_written as usize
-        + mcp_result.result_evidence_written as usize
-        + mcp_result.recovery_evidence_written as usize;
-    let follow_up_text = Some(format_tool_follow_up(&mcp_result));
+fn provider_tool_follow_up(
+    mcp_result: McpRuntimeExecutionResult,
+    auto_reader_result: Option<McpRuntimeExecutionResult>,
+) -> ProviderToolCallExecution {
+    let evidence_written = evidence_written_count(&mcp_result)
+        + auto_reader_result
+            .as_ref()
+            .map(evidence_written_count)
+            .unwrap_or(0);
+    let follow_up_text = Some(format_tool_follow_up(
+        &mcp_result,
+        auto_reader_result.as_ref(),
+    ));
     ProviderToolCallExecution {
         evidence_written,
         follow_up_text,
     }
 }
 
-fn format_tool_follow_up(result: &McpRuntimeExecutionResult) -> String {
+fn evidence_written_count(result: &McpRuntimeExecutionResult) -> usize {
+    result.request_evidence_written as usize
+        + result.result_evidence_written as usize
+        + result.recovery_evidence_written as usize
+}
+
+fn format_tool_follow_up(
+    result: &McpRuntimeExecutionResult,
+    auto_reader_result: Option<&McpRuntimeExecutionResult>,
+) -> String {
     let body = result
         .result_text
         .as_deref()
         .map(str::trim)
         .filter(|text| !text.is_empty())
         .unwrap_or(result.result_summary.as_str());
+    if let Some(reader_result) = auto_reader_result {
+        let reader_body = reader_result
+            .result_text
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .unwrap_or(reader_result.result_summary.as_str());
+        return format!(
+            "Tool result for {} from {}: {}.\n{}\nAuto-read paged output via {} from {}: {}.\n{}",
+            result.tool_name,
+            result.server_name,
+            result.status,
+            body,
+            reader_result.tool_name,
+            reader_result.server_name,
+            reader_result.status,
+            reader_body
+        );
+    }
     if let Some(advisory) = paged_mcp_output_advisory(body) {
         return format!(
             "Tool result for {} from {}: {}.\n{}\n{}",
@@ -113,6 +150,13 @@ fn format_tool_follow_up(result: &McpRuntimeExecutionResult) -> String {
 }
 
 fn paged_mcp_output_advisory(body: &str) -> Option<String> {
+    let (reader_tool, output_ref) = paged_mcp_output_reader(body)?;
+    Some(format!(
+        "The full output is paged as {output_ref}. To read it, emit exactly this JSON tool-call envelope and no surrounding prose: {{\"narada_tool_call\":{{\"name\":\"{reader_tool}\",\"arguments\":{{\"output_ref\":\"{output_ref}\"}}}}}}"
+    ))
+}
+
+fn paged_mcp_output_reader(body: &str) -> Option<(String, String)> {
     let value: Value = serde_json::from_str(body).ok()?;
     if value.get("truncated").and_then(Value::as_bool) != Some(true) {
         return None;
@@ -125,9 +169,7 @@ fn paged_mcp_output_advisory(body: &str) -> Option<String> {
         .get("output_ref")
         .or_else(|| value.get("ref"))
         .and_then(Value::as_str)?;
-    Some(format!(
-        "The full output is paged as {output_ref}. To read it, emit exactly this JSON tool-call envelope and no surrounding prose: {{\"narada_tool_call\":{{\"name\":\"{reader_tool}\",\"arguments\":{{\"output_ref\":\"{output_ref}\"}}}}}}"
-    ))
+    Some((reader_tool.to_string(), output_ref.to_string()))
 }
 pub fn provider_tool_call_executor_from_mcp_runtime_config(
     session_jsonl_path: impl AsRef<Path>,
@@ -211,6 +253,7 @@ pub fn execute_provider_tool_output<E: McpRuntimeToolExecutor>(
             status: ProviderToolCallBridgeStatus::IgnoredNonToolOutput,
             tool_name: None,
             mcp_result: None,
+            auto_reader_result: None,
         });
     };
     let provider_turn_id = output
@@ -233,11 +276,68 @@ pub fn execute_provider_tool_output<E: McpRuntimeToolExecutor>(
     }
     let tool_name = prepared.tool_name.clone();
     let result = runtime.execute_prepared_tool_call(&prepared, clock)?;
+    let auto_reader_result = execute_auto_paged_output_reader(
+        &request,
+        &result,
+        sequence,
+        fabric_client,
+        boundary,
+        evidence_context,
+        runtime,
+        clock,
+    )?;
     Ok(ProviderToolCallBridgeResult {
         status: ProviderToolCallBridgeStatus::Executed,
         tool_name: Some(tool_name),
         mcp_result: Some(result),
+        auto_reader_result,
     })
+}
+
+fn execute_auto_paged_output_reader<E: McpRuntimeToolExecutor>(
+    original_request: &McpToolRequest,
+    result: &McpRuntimeExecutionResult,
+    sequence: u64,
+    fabric_client: &McpFabricTransportClient,
+    boundary: &McpFabricBoundary,
+    evidence_context: &SessionEvidenceContext,
+    runtime: &mut McpRuntimeExecutionBridge<E>,
+    clock: &McpRuntimeExecutionClock,
+) -> Result<Option<McpRuntimeExecutionResult>, String> {
+    if original_request.tool_name == "mcp_output_show" {
+        return Ok(None);
+    }
+    let body = result
+        .result_text
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .unwrap_or(result.result_summary.as_str());
+    let Some((reader_tool, output_ref)) = paged_mcp_output_reader(body) else {
+        return Ok(None);
+    };
+    let arguments = json!({
+        "ref": output_ref,
+        "output_limit": 10000,
+    });
+    let request = McpToolRequest {
+        tool_name: reader_tool,
+        arguments_summary: arguments.to_string(),
+        arguments_ref: None,
+        requesting_agent_id: original_request.requesting_agent_id.clone(),
+    };
+    let prepared = fabric_client.prepare_tool_call(
+        boundary,
+        &request,
+        arguments,
+        sequence.saturating_add(10_000),
+        evidence_context,
+        format!("{}_auto_reader_{}", clock.event_id_prefix, sequence),
+        clock.occurred_at.clone(),
+    )?;
+    runtime
+        .execute_prepared_tool_call(&prepared, clock)
+        .map(Some)
 }
 
 fn resolve_provider_tool_alias(
@@ -411,6 +511,29 @@ mod tests {
             &mut self,
             prepared: &crate::mcp_fabric_transport::McpFabricPreparedToolCall,
         ) -> Result<McpStdioProcessIoResult, String> {
+            if prepared.tool_name == "mcp_output_show" {
+                return Ok(McpStdioProcessIoResult {
+                    server_name: prepared.server_name.clone(),
+                    request_turn_id: prepared
+                        .request_event
+                        .payload
+                        .get("turn_id")
+                        .and_then(|value| value.as_str())
+                        .map(ToString::to_string),
+                    tool_result: McpToolResult {
+                        tool_name: prepared.tool_name.clone(),
+                        status: "ok".to_string(),
+                        duration_ms: 14,
+                        result_summary: "narada.mcp_output_show.v1".to_string(),
+                        result_text: Some(
+                            r#"{"schema":"narada.mcp_output_show.v1","status":"ok","ref":"mcp_output:o_6cd77433e384445e976c7fdf","output_text":"{\"status\":\"ok\",\"startup_readiness\":{\"status\":\"ok\"}}"}"#
+                                .to_string(),
+                        ),
+                        result_ref: None,
+                    },
+                    response_line: "{}".to_string(),
+                });
+            }
             Ok(McpStdioProcessIoResult {
                 server_name: prepared.server_name.clone(),
                 request_turn_id: prepared
@@ -674,7 +797,7 @@ mod tests {
     }
 
     #[test]
-    fn paged_startup_tool_follow_up_tells_provider_to_emit_reader_tool_call() {
+    fn paged_startup_tool_follow_up_auto_reads_reader_tool_call() {
         let path = temp_session_path();
         let fabric = McpFabricTransportClient::from_json_str(
             "fixture.mcp.json",
@@ -714,12 +837,26 @@ mod tests {
             .follow_up_text
             .expect("startup tool result creates provider follow-up");
 
+        assert_eq!(written.evidence_written, 4);
         assert!(follow_up.contains("Tool result for agent_context_startup_sequence"));
         assert!(follow_up.contains("mcp_output:o_6cd77433e384445e976c7fdf"));
-        assert!(follow_up.contains("emit exactly this JSON tool-call envelope"));
-        assert!(follow_up.contains(
-            r#"{"narada_tool_call":{"name":"mcp_output_show","arguments":{"output_ref":"mcp_output:o_6cd77433e384445e976c7fdf"}}}"#
-        ));
+        assert!(follow_up.contains("Auto-read paged output via mcp_output_show"));
+        assert!(follow_up.contains("narada.mcp_output_show.v1"));
+        assert!(follow_up.contains("startup_readiness"));
+        let contents = read_to_string(&path).expect("session jsonl exists");
+        let events = contents
+            .lines()
+            .map(|line| crate::carrier_protocol::parse_session_event(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[2].event_kind, SessionEventKind::ToolCallRequested);
+        assert_eq!(events[2].payload["tool_name"], "mcp_output_show");
+        assert_eq!(
+            events[2].payload["arguments_summary"],
+            r#"{"output_limit":10000,"ref":"mcp_output:o_6cd77433e384445e976c7fdf"}"#
+        );
+        assert_eq!(events[3].event_kind, SessionEventKind::ToolResultReceived);
+        assert_eq!(events[3].payload["tool_name"], "mcp_output_show");
         let _ = remove_file(path);
     }
 
