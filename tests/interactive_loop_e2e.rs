@@ -215,13 +215,13 @@ fn final_frame_contains_operator_agent_tool_result_and_completion_for_startup_se
         proof_slug: "startup_sequence",
         input_text: "run startup sequence",
         server_name: "sonar-agent-context",
-        tool_name: "startup_sequence",
+        tool_name: "agent_context_startup_sequence",
         arguments_summary: "{}",
         result_summary: "content_items=1",
         result_text: "Startup sequence completed for sonar.resident.",
         expected_operator_line: "operator -> sonar.resident: run startup sequence",
-        expected_tool_request_line: "sonar.resident -> agent-tui: startup_sequence({})",
-        expected_tool_result_line: "agent-tui -> sonar.resident: ok startup_sequence in 10ms · content_items=1",
+        expected_tool_request_line: "sonar.resident -> agent-tui: agent_context_startup_sequence({})",
+        expected_tool_result_line: "agent-tui -> sonar.resident: ok agent_context_startup_sequence in 10ms · content_items=1",
         expected_final_agent_line: "sonar.resident: Startup sequence completed for sonar.resident.",
     });
 }

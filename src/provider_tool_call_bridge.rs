@@ -225,7 +225,7 @@ fn resolve_provider_tool_alias(
     }
     let aliases: &[&str] = match request.tool_name.as_str() {
         "startup_sequence" | "agent_context_startup_sequence" => {
-            &["startup_sequence", "agent_context_startup_sequence"]
+            &["agent_context_startup_sequence", "startup_sequence"]
         }
         _ => &[],
     };

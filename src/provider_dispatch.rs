@@ -594,9 +594,10 @@ fn direct_operator_intent_tool_call(content: &str) -> Option<(String, String)> {
         .join(" ")
         .to_ascii_lowercase();
     match normalized.as_str() {
-        "run startup sequence" | "startup sequence" => {
-            Some(("startup_sequence".to_string(), "{}".to_string()))
-        }
+        "run startup sequence" | "startup sequence" => Some((
+            "agent_context_startup_sequence".to_string(),
+            "{}".to_string(),
+        )),
         _ => None,
     }
 }
@@ -1112,11 +1113,17 @@ mod tests {
     fn routes_startup_sequence_intent_directly_to_startup_tool() {
         assert_eq!(
             direct_operator_intent_tool_call("run startup sequence"),
-            Some(("startup_sequence".to_string(), "{}".to_string()))
+            Some((
+                "agent_context_startup_sequence".to_string(),
+                "{}".to_string()
+            ))
         );
         assert_eq!(
             direct_operator_intent_tool_call("  startup   sequence.  "),
-            Some(("startup_sequence".to_string(), "{}".to_string()))
+            Some((
+                "agent_context_startup_sequence".to_string(),
+                "{}".to_string()
+            ))
         );
         assert_eq!(direct_operator_intent_tool_call("check startup docs"), None);
     }
@@ -1176,7 +1183,10 @@ mod tests {
         assert_eq!(record.status, ProviderDispatchStatus::Completed);
         assert_eq!(record.outputs.len(), 1);
         assert_eq!(record.outputs[0].kind, ProviderOutputKind::ToolCallRequest);
-        assert_eq!(record.outputs[0].payload["tool_name"], "startup_sequence");
+        assert_eq!(
+            record.outputs[0].payload["tool_name"],
+            "agent_context_startup_sequence"
+        );
         assert_eq!(record.outputs[0].payload["arguments_summary"], "{}");
     }
 

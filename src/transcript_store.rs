@@ -361,7 +361,7 @@ mod tests {
                 json!({
                     "turn_id": "turn_step241_1",
                     "sequence": 1,
-                    "tool_name": "startup_sequence",
+                    "tool_name": "agent_context_startup_sequence",
                     "arguments_summary": "{}"
                 }),
             )),
@@ -373,7 +373,7 @@ mod tests {
                 SessionEventKind::ToolResultReceived,
                 json!({
                     "turn_id": "turn_step241_1",
-                    "tool_name": "startup_sequence",
+                    "tool_name": "agent_context_startup_sequence",
                     "status": "ok",
                     "duration_ms": 10,
                     "result_summary": "content_items=1"
@@ -402,8 +402,11 @@ mod tests {
             .map(|item| item.text.as_str())
             .collect::<Vec<_>>();
         assert_eq!(rendered[0], "run startup sequence");
-        assert_eq!(rendered[1], "startup_sequence({})");
-        assert_eq!(rendered[2], "ok startup_sequence in 10ms · content_items=1");
+        assert_eq!(rendered[1], "agent_context_startup_sequence({})");
+        assert_eq!(
+            rendered[2],
+            "ok agent_context_startup_sequence in 10ms · content_items=1"
+        );
         assert_eq!(rendered[3], "completed");
     }
 

@@ -661,7 +661,7 @@ mod tests {
         let item = project_session_event(&event(
             SessionEventKind::ToolResultReceived,
             json!({
-                "tool_name": "startup_sequence",
+                "tool_name": "agent_context_startup_sequence",
                 "status": "ok",
                 "duration_ms": 4,
                 "result_summary": "content_items=1",
@@ -673,7 +673,7 @@ mod tests {
 
         assert_eq!(
             item.text,
-            "ok startup_sequence in 4ms · content_items=1\nStartup sequence completed for sonar.resident."
+            "ok agent_context_startup_sequence in 4ms · content_items=1\nStartup sequence completed for sonar.resident."
         );
     }
 
