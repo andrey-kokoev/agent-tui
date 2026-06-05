@@ -253,47 +253,129 @@ fn transcript_blocks_with_active_marker(
     width: usize,
 ) -> Vec<Vec<Line<'static>>> {
     let mut blocks = transcript_blocks(&model.transcript_rows, agent_identity, width);
-    if let Some(marker) = active_thinking_marker_block(model, agent_identity, width) {
-        blocks.push(marker);
-    }
-    blocks
-}
-
-fn active_thinking_marker_block(
-    model: &AppViewModel,
-    agent_identity: &str,
-    width: usize,
-) -> Option<Vec<Line<'static>>> {
+    let Some(marker) = active_turn_marker_text(model) else {
+        return blocks;
+    };
     if model
         .transcript_rows
         .last()
-        .is_some_and(|row| row.kind == TranscriptItemKind::ProviderTextDelta)
+        .is_some_and(latest_row_can_host_active_marker)
+        && attach_active_marker_to_latest_block(&mut blocks, &marker, width)
     {
-        return None;
+        return blocks;
     }
+    blocks.push(active_turn_marker_block(agent_identity, &marker, width));
+    blocks
+}
+
+fn active_turn_marker_text(model: &AppViewModel) -> Option<String> {
     let value = model
         .status
         .segments
         .iter()
         .find(|segment| segment.key == "turn_state")
         .map(|segment| turn_state_display_value(&segment.value))?;
-    let marker = thinking_marker_text(&value)?;
+    turn_marker_text(&value)
+}
+
+fn latest_row_can_host_active_marker(row: &TranscriptRow) -> bool {
+    row.actor == TranscriptActor::Agent || row.kind == TranscriptItemKind::ProviderToolCallRequest
+}
+
+fn attach_active_marker_to_latest_block(
+    blocks: &mut [Vec<Line<'static>>],
+    marker: &str,
+    width: usize,
+) -> bool {
+    let Some(block) = blocks.last_mut() else {
+        return false;
+    };
+    let Some(label_line) = block.first_mut() else {
+        return false;
+    };
+    let mut spans = label_line.spans.clone();
+    spans.push(Span::styled(" ".to_string(), muted_style()));
+    spans.push(Span::styled(marker.to_string(), muted_style()));
+    if span_text_len(&spans) <= width {
+        *label_line = Line::from(spans);
+    } else {
+        let indent = "  ";
+        let marker_width = width.saturating_sub(indent.chars().count()).max(1);
+        block.insert(
+            1,
+            Line::from(vec![
+                Span::styled(indent.to_string(), muted_style()),
+                Span::styled(truncate_text(marker, marker_width), muted_style()),
+            ]),
+        );
+    }
+    true
+}
+
+fn active_turn_marker_block(
+    agent_identity: &str,
+    marker: &str,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let marker_len = marker.chars().count();
+    if marker_len >= width {
+        return vec![Line::from(Span::styled(
+            truncate_text(marker, width),
+            muted_style(),
+        ))];
+    }
+    let separator_width = 2;
+    if width <= marker_len + separator_width {
+        return vec![Line::from(Span::styled(marker.to_string(), muted_style()))];
+    }
+    let identity_width = width - marker_len - separator_width;
     let mut spans = vec![Span::styled(
-        agent_identity.to_string(),
+        truncate_text(agent_identity, identity_width),
         agent_label_style(),
     )];
     spans.push(Span::styled(": ".to_string(), muted_style()));
-    spans.push(Span::styled(marker, muted_style()));
-    Some(vec![Line::from(truncate_spans_to_width(spans, width))])
+    spans.push(Span::styled(marker.to_string(), muted_style()));
+    vec![Line::from(spans)]
 }
 
-fn thinking_marker_text(value: &str) -> Option<String> {
+fn turn_marker_text(value: &str) -> Option<String> {
     if value == "thinking" {
         return Some("Thinking".to_string());
     }
+    if let Some(detail) = value.strip_prefix("thinking ") {
+        return Some(format!("Thinking {detail}"));
+    }
     value
-        .strip_prefix("thinking ")
-        .map(|detail| format!("Thinking {detail}"))
+        .strip_prefix("calling ")
+        .map(|detail| format!("Calling {detail}"))
+        .or_else(|| significant_turn_state_marker(value))
+}
+
+fn significant_turn_state_marker(value: &str) -> Option<String> {
+    match value {
+        "idle" | "active" => None,
+        value if value.trim().is_empty() => None,
+        value => Some(title_case_status_phrase(value)),
+    }
+}
+
+fn title_case_status_phrase(value: &str) -> String {
+    value
+        .replace(['_', '-'], " ")
+        .split_whitespace()
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(first) => {
+                    let mut titled = first.to_uppercase().collect::<String>();
+                    titled.push_str(chars.as_str());
+                    titled
+                }
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn transcript_block(row: &TranscriptRow, agent_identity: &str, width: usize) -> Vec<Line<'static>> {
@@ -2090,8 +2172,8 @@ fn preferred_split_byte_index(value: &str, width: usize) -> usize {
 
 fn status_paragraph(model: &AppViewModel) -> Paragraph<'_> {
     let width = model.layout.status.width as usize;
-    let segments = status_segments_with_scroll(model);
-    Paragraph::new(Line::from(status_spans(&segments, width)))
+    let _ = status_spans(&status_segments_with_scroll(model), width);
+    Paragraph::new(Line::from(""))
 }
 
 fn status_segments_with_scroll(model: &AppViewModel) -> Vec<StatusSegment> {
@@ -2611,7 +2693,7 @@ fn composer_draft_style(model: &AppViewModel) -> Style {
     if source == "operator note" {
         ui_theme::warning_count()
     } else {
-        ui_theme::positive()
+        ui_theme::body()
     }
 }
 
@@ -2976,7 +3058,7 @@ mod tests {
     }
 
     #[test]
-    fn active_turn_omits_thinking_marker_after_agent_text_is_visible() {
+    fn active_turn_keeps_thinking_marker_after_agent_text_is_visible() {
         let model = active_thinking_model(vec![TranscriptItem {
             kind: TranscriptItemKind::ProviderTextDelta,
             actor: TranscriptActor::Agent,
@@ -2991,9 +3073,150 @@ mod tests {
         render_app_to_buffer(&model, &mut buffer);
         let text = buffer_text(&buffer);
 
-        assert!(text.contains("sonar.resident:"));
+        assert!(!text.contains("Already responding.\n\nsonar.resident: Thinking 8s"));
         assert!(text.contains("Already responding."));
-        assert!(!text.contains("Thinking 8s"));
+        assert!(text.contains("sonar.resident: Thinking 8s"));
+        let (_, label_y) = find_text_position(&buffer, "sonar.resident: Thinking 8s")
+            .expect("thinking marker is attached to the agent label");
+        let (_, body_y) = find_text_position(&buffer, "Already responding.")
+            .expect("agent response body is rendered");
+        let (_, timestamp_y) = find_text_position(&buffer, "2026-05-30Z00:00")
+            .expect("agent response timestamp is rendered");
+        assert_eq!(body_y, label_y + 1);
+        assert_eq!(timestamp_y, body_y + 1);
+    }
+
+    #[test]
+    fn active_turn_keeps_thinking_marker_when_attached_label_is_too_long() {
+        let mut model = active_thinking_model(vec![TranscriptItem {
+            kind: TranscriptItemKind::ProviderTextDelta,
+            actor: TranscriptActor::Agent,
+            turn_id: "turn_1".to_string(),
+            text: "Already responding.".to_string(),
+            sequence: Some(1),
+            projection_key: None,
+            occurred_at: Some("2026-05-30T00:00:00.000Z".to_string()),
+        }]);
+        model.layout.transcript.width = 42;
+        model.layout.status.width = 42;
+        model.layout.composer.width = 42;
+        for segment in &mut model.status.segments {
+            if segment.key == "identity" {
+                segment.value = "narada-timour-marketing-agent.builder2".to_string();
+            }
+        }
+        let mut buffer = Buffer::empty(TuiRect::new(0, 0, 42, 12));
+
+        render_app_to_buffer(&model, &mut buffer);
+        let text = buffer_text(&buffer);
+
+        assert!(text.contains("narada-timour-marketing-agent.builder2:"));
+        assert!(text.contains("  Thinking 8s"));
+        assert!(text.contains("Already responding."));
+        let (_, label_y) = find_text_position(&buffer, "narada-timour-marketing-agent.builder2:")
+            .expect("long agent label is rendered");
+        let (_, marker_y) =
+            find_text_position(&buffer, "Thinking 8s").expect("thinking marker is rendered");
+        let (_, body_y) = find_text_position(&buffer, "Already responding.")
+            .expect("agent response body is rendered");
+        assert_eq!(marker_y, label_y + 1);
+        assert_eq!(body_y, marker_y + 1);
+    }
+
+    #[test]
+    fn active_tool_call_phase_attaches_progress_to_tool_request() {
+        let mut model = active_thinking_model(vec![TranscriptItem {
+            kind: TranscriptItemKind::ProviderToolCallRequest,
+            actor: TranscriptActor::AgentTui,
+            turn_id: "turn_1".to_string(),
+            text: "site_loop_run_once({})".to_string(),
+            sequence: Some(1),
+            projection_key: None,
+            occurred_at: Some("2026-05-30T00:00:00.000Z".to_string()),
+        }]);
+        for segment in &mut model.status.segments {
+            if segment.key == "turn_state" {
+                segment.value = "calling site_loop_run_once 8s".to_string();
+            }
+        }
+        let mut buffer = Buffer::empty(TuiRect::new(0, 0, 100, 12));
+
+        render_app_to_buffer(&model, &mut buffer);
+        let text = buffer_text(&buffer);
+
+        assert!(text.contains("sonar.resident -> agent-tui: site_loop_run_once({})"));
+        assert!(text.contains("  Calling site_loop_run_once 8s"));
+        assert!(!text.contains("site_loop_run_once({})\n\nsonar.resident: Calling"));
+        let (_, tool_y) = find_text_position(&buffer, "site_loop_run_once({})")
+            .expect("tool call request is rendered");
+        let (_, marker_y) = find_text_position(&buffer, "Calling site_loop_run_once 8s")
+            .expect("active tool-call marker is rendered");
+        assert_eq!(marker_y, tool_y + 1);
+    }
+
+    #[test]
+    fn active_interrupted_phase_renders_as_transcript_marker() {
+        let mut model = active_thinking_model(vec![TranscriptItem {
+            kind: TranscriptItemKind::ProviderTextDelta,
+            actor: TranscriptActor::Agent,
+            turn_id: "turn_1".to_string(),
+            text: "Provider stopped before finishing.".to_string(),
+            sequence: Some(1),
+            projection_key: None,
+            occurred_at: Some("2026-05-30T00:00:00.000Z".to_string()),
+        }]);
+        for segment in &mut model.status.segments {
+            if segment.key == "turn_state" {
+                segment.value = "interrupted".to_string();
+            }
+        }
+        let mut buffer = Buffer::empty(TuiRect::new(0, 0, 80, 12));
+
+        render_app_to_buffer(&model, &mut buffer);
+        let text = buffer_text(&buffer);
+
+        assert!(text.contains("sonar.resident: Interrupted"));
+        assert!(text.contains("Provider stopped before finishing."));
+        assert!(
+            !text.contains("Provider stopped before finishing.\n\nsonar.resident: Interrupted")
+        );
+    }
+
+    #[test]
+    fn active_internal_phase_tokens_render_as_human_transcript_marker() {
+        let mut model = active_thinking_model(Vec::new());
+        for segment in &mut model.status.segments {
+            if segment.key == "turn_state" {
+                segment.value = "provider_cancelled".to_string();
+            }
+        }
+        let mut buffer = Buffer::empty(TuiRect::new(0, 0, 80, 12));
+
+        render_app_to_buffer(&model, &mut buffer);
+        let text = buffer_text(&buffer);
+
+        assert!(text.contains("sonar.resident: Provider Cancelled"));
+        assert!(!text.contains("provider_cancelled"));
+    }
+
+    #[test]
+    fn standalone_active_marker_preserves_marker_when_identity_is_long() {
+        let mut model = active_thinking_model(Vec::new());
+        model.layout.transcript.width = 36;
+        model.layout.status.width = 36;
+        model.layout.composer.width = 36;
+        for segment in &mut model.status.segments {
+            if segment.key == "identity" {
+                segment.value = "narada-timour-marketing-agent.builder2".to_string();
+            }
+        }
+        let mut buffer = Buffer::empty(TuiRect::new(0, 0, 36, 12));
+
+        render_app_to_buffer(&model, &mut buffer);
+        let text = buffer_text(&buffer);
+
+        assert!(text.contains("Thinking 8s"));
+        assert!(text.contains("narada-timour-mark...: Thinking 8s"));
     }
 
     #[test]
@@ -3691,10 +3914,8 @@ mod tests {
                 held_system_directives: 1,
             },
         });
-        let mut buffer = Buffer::empty(TuiRect::new(0, 0, 120, 12));
-
-        render_app_to_buffer(&model, &mut buffer);
-        let text = buffer_text(&buffer);
+        let spans = status_spans(&model.status.segments, 120);
+        let text: String = spans.iter().map(|span| span.content.as_ref()).collect();
 
         assert!(!text.contains("calling site_loop_run_once 8s"));
         assert!(text.contains("queued operator steering 2"));
@@ -3702,47 +3923,6 @@ mod tests {
         assert!(text.contains("oldest 22s"));
         assert!(!text.contains("Esc interrupt"));
         assert!(!text.contains("provider working"));
-        let (queued_label_x, queued_y) = find_text_position(&buffer, "queued operator steering")
-            .expect("queued operator steering label appears in status");
-        let queued_operator_x = queued_label_x + "queued ".chars().count() as u16;
-        let queued_mode_x = queued_label_x + "queued operator ".chars().count() as u16;
-        let queued_value_x = queued_label_x + "queued operator steering ".chars().count() as u16;
-        let (held_x, held_y) = find_text_position(&buffer, "held system directives 1")
-            .expect("held system directive segment appears in status");
-        let held_system_x = held_x + "held ".chars().count() as u16;
-        let held_directive_x = held_x + "held system ".chars().count() as u16;
-        let held_count_x = held_x + "held system directives ".chars().count() as u16;
-        let (separator_x, separator_y) = find_text_position(&buffer, " | held system directives")
-            .expect("separator appears before held segment");
-        let (oldest_label_x, oldest_y) =
-            find_text_position(&buffer, "oldest 22s").expect("oldest held age appears in status");
-        let oldest_value_x = oldest_label_x + "oldest ".chars().count() as u16;
-
-        assert_eq!(buffer[(queued_label_x, queued_y)].fg, Color::Green);
-        assert_eq!(buffer[(queued_operator_x, queued_y)].fg, Color::Green);
-        assert!(
-            buffer[(queued_operator_x, queued_y)]
-                .modifier
-                .contains(Modifier::BOLD)
-        );
-        assert_eq!(buffer[(queued_mode_x, queued_y)].fg, Color::Magenta);
-        assert_eq!(buffer[(queued_value_x, queued_y)].fg, Color::Magenta);
-        assert!(
-            buffer[(queued_value_x, queued_y)]
-                .modifier
-                .contains(Modifier::BOLD)
-        );
-        assert_eq!(buffer[(held_system_x, held_y)].fg, Color::LightMagenta);
-        assert!(
-            buffer[(held_system_x, held_y)]
-                .modifier
-                .contains(Modifier::BOLD)
-        );
-        assert_eq!(buffer[(held_directive_x, held_y)].fg, Color::Magenta);
-        assert_eq!(buffer[(held_count_x, held_y)].fg, Color::Magenta);
-        assert_eq!(buffer[(oldest_label_x, oldest_y)].fg, Color::Yellow);
-        assert_eq!(buffer[(oldest_value_x, oldest_y)].fg, Color::Gray);
-        assert_eq!(buffer[(separator_x, separator_y)].fg, Color::DarkGray);
     }
 
     #[test]
@@ -4540,7 +4720,13 @@ mod tests {
         assert!(text.contains("operator note -> sonar.resident>"));
         assert!(!text.contains("Composer:"));
         assert!(text.contains("active live note"));
-        assert!(text.contains("queued operator steering 2"));
+        assert!(
+            model
+                .status
+                .compact_line
+                .contains("queued operator steering 2")
+        );
+        assert!(!text.contains("queued operator steering 2"));
         assert!(!text.contains("snapshot stale"));
     }
 }

@@ -149,7 +149,7 @@ pub fn decide_payload_inline(
         InlinePayloadDecision::RequiresRef(PayloadRef {
             schema: PAYLOAD_REF_SCHEMA.to_string(),
             payload_ref: payload_ref_id.into(),
-            reader_tool: "mcp_payload_read".to_string(),
+            reader_tool: "mcp_payload_show".to_string(),
             summary: summary.into(),
         })
     } else {

@@ -100,10 +100,34 @@ fn format_tool_follow_up(result: &McpRuntimeExecutionResult) -> String {
         .map(str::trim)
         .filter(|text| !text.is_empty())
         .unwrap_or(result.result_summary.as_str());
+    if let Some(advisory) = paged_mcp_output_advisory(body) {
+        return format!(
+            "Tool result for {} from {}: {}.\n{}\n{}",
+            result.tool_name, result.server_name, result.status, body, advisory
+        );
+    }
     format!(
         "Tool result for {} from {}: {}.\n{}",
         result.tool_name, result.server_name, result.status, body
     )
+}
+
+fn paged_mcp_output_advisory(body: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(body).ok()?;
+    if value.get("truncated").and_then(Value::as_bool) != Some(true) {
+        return None;
+    }
+    let reader_tool = value.get("reader_tool").and_then(Value::as_str)?;
+    if reader_tool != "mcp_output_show" {
+        return None;
+    }
+    let output_ref = value
+        .get("output_ref")
+        .or_else(|| value.get("ref"))
+        .and_then(Value::as_str)?;
+    Some(format!(
+        "The full output is paged as {output_ref}. To read it, emit exactly this JSON tool-call envelope and no surrounding prose: {{\"narada_tool_call\":{{\"name\":\"{reader_tool}\",\"arguments\":{{\"output_ref\":\"{output_ref}\"}}}}}}"
+    ))
 }
 pub fn provider_tool_call_executor_from_mcp_runtime_config(
     session_jsonl_path: impl AsRef<Path>,
@@ -227,6 +251,7 @@ fn resolve_provider_tool_alias(
         "startup_sequence" | "agent_context_startup_sequence" => {
             &["agent_context_startup_sequence", "startup_sequence"]
         }
+        "mcp_payload_read" | "mcp_payload_show" => &["mcp_payload_show", "mcp_payload_read"],
         _ => &[],
     };
     for alias in aliases {
@@ -346,7 +371,7 @@ mod tests {
         McpFabricBoundary::admitted(McpFabricPolicy::from_allowed_tools(
             "D:/code/narada/.ai/mcp",
             "fixture.mcp.json:mcpServers",
-            ["agent_context_startup_sequence"],
+            ["agent_context_startup_sequence", "mcp_output_show"],
         ))
     }
 
@@ -371,6 +396,37 @@ mod tests {
                     duration_ms: 10,
                     result_summary: "content_items=1".to_string(),
                     result_text: Some("startup ok".to_string()),
+                    result_ref: None,
+                },
+                response_line: "{}".to_string(),
+            })
+        }
+    }
+
+    struct PagedStartupExecutor;
+
+    impl McpRuntimeToolExecutor for PagedStartupExecutor {
+        fn execute_tool_call(
+            &mut self,
+            prepared: &crate::mcp_fabric_transport::McpFabricPreparedToolCall,
+        ) -> Result<McpStdioProcessIoResult, String> {
+            Ok(McpStdioProcessIoResult {
+                server_name: prepared.server_name.clone(),
+                request_turn_id: prepared
+                    .request_event
+                    .payload
+                    .get("turn_id")
+                    .and_then(|value| value.as_str())
+                    .map(ToString::to_string),
+                tool_result: McpToolResult {
+                    tool_name: prepared.tool_name.clone(),
+                    status: "ok".to_string(),
+                    duration_ms: 498,
+                    result_summary: "content_items=1".to_string(),
+                    result_text: Some(
+                        r#"{"status":"ok","truncated":true,"ref":"mcp_output:o_6cd77433e384445e976c7fdf","output_ref":"mcp_output:o_6cd77433e384445e976c7fdf","reader_tool":"mcp_output_show","inline_limit":200}"#
+                            .to_string(),
+                    ),
                     result_ref: None,
                 },
                 response_line: "{}".to_string(),
@@ -489,6 +545,25 @@ mod tests {
     }
 
     #[test]
+    fn resolves_legacy_payload_reader_to_callable_payload_show() {
+        let request = McpToolRequest {
+            tool_name: "mcp_payload_read".to_string(),
+            arguments_summary: r#"{"ref":"mcp_payload:payload_test@v1"}"#.to_string(),
+            arguments_ref: None,
+            requesting_agent_id: "narada.architect".to_string(),
+        };
+        let boundary = McpFabricBoundary::admitted(McpFabricPolicy::from_allowed_tools(
+            "D:/code/narada/.ai/mcp",
+            "fixture.mcp.json:mcpServers",
+            ["mcp_payload_show"],
+        ));
+
+        let resolved = resolve_provider_tool_alias(request, &boundary);
+
+        assert_eq!(resolved.tool_name, "mcp_payload_show");
+    }
+
+    #[test]
     fn rejects_non_json_inline_arguments() {
         let output =
             ProviderOutputRecord::tool_call_request("turn_1", "site_loop_run_once", "not-json", 2);
@@ -496,6 +571,24 @@ mod tests {
             .expect_err("non-json arguments rejected");
 
         assert!(error.starts_with("provider_tool_call_arguments_not_json:not-json:"));
+    }
+
+    #[test]
+    fn sensitive_provider_tool_arguments_remain_executable_inline() {
+        let output = ProviderOutputRecord::sensitive_tool_call_request(
+            "turn_1",
+            "site_loop_run_once",
+            r#"{"secret":"value"}"#,
+            2,
+        );
+        let (request, arguments, _sequence) =
+            provider_output_to_mcp_request(&output, "sonar.resident")
+                .expect("bridge handles output")
+                .expect("tool request extracted");
+
+        assert_eq!(request.tool_name, "site_loop_run_once");
+        assert!(request.arguments_ref.is_none());
+        assert_eq!(arguments, json!({ "secret": "value" }));
     }
 
     #[test]
@@ -575,6 +668,109 @@ mod tests {
         );
         assert_ne!(events[1].event_id, "session_event_turn_step241_1");
         assert_eq!(events[1].payload["turn_id"], "turn_step241_1");
+        let _ = remove_file(path);
+    }
+
+    #[test]
+    fn paged_startup_tool_follow_up_tells_provider_to_emit_reader_tool_call() {
+        let path = temp_session_path();
+        let fabric = McpFabricTransportClient::from_json_str(
+            "fixture.mcp.json",
+            r#"{
+              "site_id":"narada-proper",
+              "carrier":"agent-tui",
+              "mcpServers":{
+                "sonar-agent-context":{
+                  "transport":"stdio",
+                  "command":"node",
+                  "args":["agent-context.mjs"],
+                  "tools":["agent_context_startup_sequence","mcp_output_show"]
+                }
+              }
+            }"#,
+        )
+        .expect("fabric config parses");
+        let mut runtime = McpRuntimeExecutionBridge::new(&path, context(), PagedStartupExecutor);
+        runtime.mark_server_ready("sonar-agent-context");
+        let mut executor = SupervisedProviderToolCallExecutor::new(
+            fabric,
+            narada_proper_startup_boundary(),
+            runtime,
+        );
+        let output = ProviderOutputRecord::tool_call_request(
+            "turn_1",
+            "agent_context_startup_sequence",
+            "{}",
+            1,
+        );
+
+        let written = executor
+            .handle_provider_output(&output, &context(), &path, &turn_clock())
+            .expect("provider startup tool output writes evidence");
+        let follow_up = written
+            .follow_up_text
+            .expect("startup tool result creates provider follow-up");
+
+        assert!(follow_up.contains("Tool result for agent_context_startup_sequence"));
+        assert!(follow_up.contains("mcp_output:o_6cd77433e384445e976c7fdf"));
+        assert!(follow_up.contains("emit exactly this JSON tool-call envelope"));
+        assert!(follow_up.contains(
+            r#"{"narada_tool_call":{"name":"mcp_output_show","arguments":{"output_ref":"mcp_output:o_6cd77433e384445e976c7fdf"}}}"#
+        ));
+        let _ = remove_file(path);
+    }
+
+    #[test]
+    fn executes_paged_output_reader_tool_call_through_tui_bridge() {
+        let path = temp_session_path();
+        let fabric = McpFabricTransportClient::from_json_str(
+            "fixture.mcp.json",
+            r#"{
+              "site_id":"narada-proper",
+              "carrier":"agent-tui",
+              "mcpServers":{
+                "sonar-agent-context":{
+                  "transport":"stdio",
+                  "command":"node",
+                  "args":["agent-context.mjs"],
+                  "tools":["agent_context_startup_sequence","mcp_output_show"]
+                }
+              }
+            }"#,
+        )
+        .expect("fabric config parses");
+        let mut runtime = McpRuntimeExecutionBridge::new(&path, context(), PagedStartupExecutor);
+        runtime.mark_server_ready("sonar-agent-context");
+        let mut executor = SupervisedProviderToolCallExecutor::new(
+            fabric,
+            narada_proper_startup_boundary(),
+            runtime,
+        );
+        let output = ProviderOutputRecord::tool_call_request(
+            "turn_1",
+            "mcp_output_show",
+            r#"{"output_ref":"mcp_output:o_6cd77433e384445e976c7fdf"}"#,
+            2,
+        );
+
+        let written = executor
+            .handle_provider_output(&output, &context(), &path, &turn_clock())
+            .expect("provider reader tool output writes evidence");
+
+        assert_eq!(written.evidence_written, 2);
+        let contents = read_to_string(&path).expect("session jsonl exists");
+        let events = contents
+            .lines()
+            .map(|line| crate::carrier_protocol::parse_session_event(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(events[0].event_kind, SessionEventKind::ToolCallRequested);
+        assert_eq!(events[0].payload["tool_name"], "mcp_output_show");
+        assert_eq!(
+            events[0].payload["arguments_summary"],
+            r#"{"output_ref":"mcp_output:o_6cd77433e384445e976c7fdf"}"#
+        );
+        assert_eq!(events[1].event_kind, SessionEventKind::ToolResultReceived);
+        assert_eq!(events[1].payload["tool_name"], "mcp_output_show");
         let _ = remove_file(path);
     }
 }

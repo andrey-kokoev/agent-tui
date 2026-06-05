@@ -210,6 +210,14 @@ fn terminal_runtime_cli_acceptance_renders_polished_transcript_frame_from_sessio
     assert!(rendered.contains("agent-tui:"));
     assert!(rendered.contains("completed"));
     assert!(rendered.contains("2026-05-30Z18:29"));
+    assert!(!rendered.contains("session carrier_fixture_1"));
+    assert!(!rendered.contains("transcript 5"));
+    assert!(!rendered.contains("provider configured"));
+    assert!(!rendered.contains("provider disabled"));
+    assert!(!rendered.contains("provider adapter"));
+    assert!(!rendered.contains("mcp configured"));
+    assert!(!rendered.contains("mcp disabled"));
     assert!(!rendered.contains("terminal configured"));
+    assert!(!rendered.contains("terminal disabled"));
     assert!(rendered.contains("operator -> sonar.resident>"));
 }

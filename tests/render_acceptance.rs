@@ -262,7 +262,7 @@ fn renderer_acceptance_frame_is_nonblank_and_contains_core_regions() {
 
     let status_y = model.layout.status.y;
     assert!(find_text_position_in_row(&buffer, status_y, "idle").is_none());
-    assert!(find_text_position_in_row(&buffer, status_y, "session").is_some());
+    assert!(content_row_is_blank(&buffer, status_y));
     assert!(find_text_position_in_row(&buffer, status_y, "draft").is_none());
 
     let composer_y = model.layout.composer.y;
@@ -285,7 +285,7 @@ fn renderer_acceptance_frame_is_nonblank_and_contains_core_regions() {
     );
     let (draft_x, draft_y) =
         find_text_position(&buffer, "operator draft").expect("composer draft is visible");
-    assert_eq!(buffer[(draft_x, draft_y)].fg, Color::Green);
+    assert_eq!(buffer[(draft_x, draft_y)].fg, Color::White);
 }
 
 #[test]
@@ -1067,6 +1067,116 @@ fn renderer_acceptance_aligns_wrapped_tool_continuations_under_tool_payload() {
 }
 
 #[test]
+fn renderer_acceptance_keeps_active_chat_frame_coherent_without_status_noise() {
+    let long_result = "{\"status\":\"ok\",\"truncated\":true,\"ref\":\"mcp_output:o_2b707f8125724467acac6bde\",\"output_ref\":\"mcp_output:o_2b707f8125724467acac6bde\",\"reader_tool\":\"mcp_output_show\",\"inline_limit\":200}";
+    let model = build_app_view(&AppViewInput {
+        terminal_size: TerminalSize {
+            width: 132,
+            height: 18,
+        },
+        layout_config: LayoutConfig::default(),
+        transcript_items: vec![
+            TranscriptItem {
+                kind: TranscriptItemKind::InputAdmitted,
+                actor: TranscriptActor::Operator,
+                turn_id: "turn_1".to_string(),
+                text: "run startup sequence".to_string(),
+                sequence: None,
+                projection_key: None,
+                occurred_at: Some("2026-06-05T16:48:00.000Z".to_string()),
+            },
+            TranscriptItem {
+                kind: TranscriptItemKind::ProviderToolCallRequest,
+                actor: TranscriptActor::AgentTui,
+                turn_id: "turn_1".to_string(),
+                text: "agent_context_startup_sequence({})".to_string(),
+                sequence: Some(1),
+                projection_key: None,
+                occurred_at: Some("2026-06-05T16:48:01.000Z".to_string()),
+            },
+            TranscriptItem {
+                kind: TranscriptItemKind::ToolResultReceived,
+                actor: TranscriptActor::AgentTui,
+                turn_id: "turn_1".to_string(),
+                text: format!(
+                    "ok agent_context_startup_sequence in 503ms · content_items=1 {long_result}"
+                ),
+                sequence: Some(2),
+                projection_key: None,
+                occurred_at: Some("2026-06-05T16:48:02.000Z".to_string()),
+            },
+            TranscriptItem {
+                kind: TranscriptItemKind::ProviderTextDelta,
+                actor: TranscriptActor::Agent,
+                turn_id: "turn_1".to_string(),
+                text: "I'll read the startup output reference now.".to_string(),
+                sequence: Some(3),
+                projection_key: None,
+                occurred_at: Some("2026-06-05T16:48:03.000Z".to_string()),
+            },
+        ],
+        status: StatusViewInput {
+            identity: "narada-revolution.resident".to_string(),
+            session: "carrier_20260605164817_b65797b9f0b3".to_string(),
+            turn_state: TurnState::Active,
+            active_phase: None,
+            active_turn_age: Some("16s".to_string()),
+            queued_inputs: 0,
+            held_system_directives: 0,
+            oldest_held_age: None,
+            transcript_items: 4,
+            runtime_posture: RuntimePostureState {
+                provider_state: ProviderRuntimeState::Configured,
+                provider_adapter_state: ProviderAdapterState::Admitted,
+                mcp_state: McpRuntimeState::Configured,
+                terminal_state: TerminalRuntimeState::Configured,
+            },
+            last_error: None,
+        },
+        composer: ComposerViewInput {
+            identity: "narada-revolution.resident".to_string(),
+            draft_text: "typing in the input field".to_string(),
+            turn_state: TurnState::Active,
+            queued_operator_notes: 0,
+            held_system_directives: 0,
+        },
+    });
+    let mut buffer = Buffer::empty(TuiRect::new(0, 0, 132, 18));
+
+    render_app_to_buffer(&model, &mut buffer);
+    let text = buffer_text(&buffer);
+
+    assert!(text.contains("narada-revolution.resident: Thinking 16s"));
+    assert!(text.contains("I'll read the startup output reference now."));
+    assert!(!text.contains("provider configured"));
+    assert!(!text.contains("provider adapter admitted"));
+    assert!(!text.contains("mcp configured"));
+    assert!(!text.contains("terminal configured"));
+    assert!(!text.contains("session carrier_20260605164817_b65797b9f0b3"));
+    assert!(!text.contains("transcript 4"));
+    let status_y = model.layout.status.y;
+    assert!(content_row_is_blank(&buffer, status_y));
+
+    let (payload_x, payload_y) = find_text_position(&buffer, "ok agent_context_startup_sequence")
+        .expect("tool result payload is visible");
+    let (_, continuation_y) =
+        find_text_position(&buffer, "output_ref").expect("wrapped tool result remains visible");
+    let continuation_x =
+        first_nonblank_content_x(&buffer, continuation_y).expect("continuation has content");
+    assert_eq!(continuation_y, payload_y + 1);
+    assert!(continuation_x < payload_x);
+    assert_eq!(continuation_x, model.layout.transcript.x + 1 + 2);
+    assert_eq!(
+        buffer[(continuation_x - 1, continuation_y)].fg,
+        Color::DarkGray
+    );
+
+    let (draft_x, draft_y) = find_text_position(&buffer, "typing in the input field")
+        .expect("composer draft is visible");
+    assert_ne!(buffer[(draft_x, draft_y)].fg, Color::Green);
+}
+
+#[test]
 fn renderer_acceptance_wrapped_tool_uses_inline_timestamp_on_final_line_when_it_fits() {
     let long_tool_text = "site_loop_run_once({ mode: full, include_mailbox: true })";
     let model = build_app_view(&AppViewInput {
@@ -1243,28 +1353,11 @@ fn renderer_acceptance_applies_transcript_scroll_offset_without_touching_compose
     assert!(scrolled_text.contains("agent message 1"));
     assert!(!scrolled_text.contains("agent message 6"));
     assert!(scrolled_text.contains("operator draft"));
-    assert!(scrolled_text.contains("scroll 16 lines"));
+    assert!(!scrolled_text.contains("scroll 16 lines"));
     let first_content_y = model.layout.transcript.y + 1;
     assert!(!content_row_is_blank(&scrolled_buffer, first_content_y));
     let status_y = model.layout.status.y;
-    let (scroll_x, scroll_y) =
-        find_text_position_in_row(&scrolled_buffer, status_y, "scroll 16 lines")
-            .expect("scroll status is visible");
-    let scroll_value_x = scroll_x + "scroll ".chars().count() as u16;
-    assert_cell_style(
-        &scrolled_buffer,
-        scroll_x,
-        scroll_y,
-        Color::Yellow,
-        Modifier::BOLD,
-    );
-    assert_cell_style(
-        &scrolled_buffer,
-        scroll_value_x,
-        scroll_y,
-        Color::Magenta,
-        Modifier::BOLD,
-    );
+    assert!(content_row_is_blank(&scrolled_buffer, status_y));
 }
 
 #[test]
@@ -1385,7 +1478,13 @@ fn renderer_acceptance_renders_carrier_local_queue_feedback_as_agent_tui_block()
     assert!(text.contains("  queue: 1 item"));
     assert!(text.contains("  1. operator · 1m 10s · queued note"));
     assert!(text.contains("  2026-05-30Z18:39"));
-    assert!(text.contains("queued operator steering 1"));
+    assert!(
+        model
+            .status
+            .compact_line
+            .contains("queued operator steering 1")
+    );
+    assert!(!text.contains("queued operator steering 1"));
     assert!(text.contains("operator note -> sonar.resident>"));
     assert_cell_style(&buffer, 1, 1, Color::Magenta, Modifier::BOLD);
     assert_cell_style(&buffer, 3, 2, Color::Magenta, Modifier::BOLD);
@@ -1876,7 +1975,7 @@ fn renderer_acceptance_status_and_composer_are_adjacent_without_blank_gap() {
     assert!(
         find_text_position_in_row(&buffer, composer_y, "operator -> sonar.resident>").is_some()
     );
-    assert!(!content_row_is_blank(&buffer, status_y));
+    assert!(content_row_is_blank(&buffer, status_y));
     assert!(!content_row_is_blank(&buffer, composer_y));
 }
 
@@ -2764,7 +2863,8 @@ fn renderer_acceptance_does_not_render_blank_provider_text_blocks() {
     assert!(text.contains("sonar.resident:"));
     assert!(text.contains("Visible response."));
     assert!(text.contains("2026-05-30Z00:14"));
-    assert!(text.contains("transcript 1"));
+    assert!(model.status.compact_line.contains("transcript 1"));
+    assert!(!text.contains("transcript 1"));
     assert!(!text.contains("2026-05-30Z00:13"));
     assert!(!text.contains("transcript 2"));
 }
@@ -3200,9 +3300,22 @@ fn renderer_acceptance_prioritizes_status_segments_in_narrow_width() {
 
     assert!(text.contains("sonar.resident"));
     assert!(!text.contains("thinking 1m 12s"));
-    assert!(text.contains("queued operator steering 2"));
-    assert!(text.contains("held system directives 1"));
-    assert!(text.contains("oldest 1m 14s"));
+    assert!(
+        model
+            .status
+            .compact_line
+            .contains("queued operator steering 2")
+    );
+    assert!(
+        model
+            .status
+            .compact_line
+            .contains("held system directives 1")
+    );
+    assert!(model.status.compact_line.contains("oldest 1m 14s"));
+    assert!(!text.contains("queued operator steering 2"));
+    assert!(!text.contains("held system directives 1"));
+    assert!(!text.contains("oldest 1m 14s"));
     assert!(!text.contains("Esc interrupt"));
     assert!(!text.contains("carrier_fixture_with_a_long_identifier"));
 }
@@ -3256,7 +3369,7 @@ fn renderer_acceptance_does_not_render_orphan_status_separator_or_dot_when_tight
 
     assert!(!status_line.contains("idle"));
     assert!(!status_line.contains("provider disabled"));
-    assert!(status_line.contains("session"));
+    assert!(status_line.trim().is_empty());
     assert!(!status_line.contains("| ."));
     assert!(!status_line.trim_end().ends_with('|'));
 }
@@ -3299,17 +3412,16 @@ fn renderer_acceptance_truncates_overlong_priority_status_segment_in_place() {
     let text = buffer_text(&buffer);
     let status_y = model.layout.status.y;
 
-    assert!(text.contains("error provider"));
-    assert!(text.contains("..."));
+    assert!(
+        model
+            .status
+            .compact_line
+            .contains("error provider cancelled")
+    );
+    assert!(!text.contains("error provider"));
     assert!(!text.contains("task_projection"));
     assert!(!text.contains("queued operator steering 2"));
-    let (ellipsis_x, ellipsis_y) = find_text_position_in_row(&buffer, status_y, "...")
-        .expect("in-place status truncation marker is visible");
-    let (error_x, error_y) =
-        find_text_position_in_row(&buffer, status_y, "error").expect("truncated error is visible");
-
-    assert_cell_style(&buffer, error_x, error_y, Color::Yellow, Modifier::BOLD);
-    assert_eq!(buffer[(ellipsis_x, ellipsis_y)].fg, Color::DarkGray);
+    assert!(content_row_is_blank(&buffer, status_y));
 }
 
 #[test]
@@ -3366,26 +3478,15 @@ fn renderer_acceptance_colors_negative_status_values_by_semantic_state() {
     assert!(!status_line.contains("interrupted"));
     assert!(text.contains("provider failed"));
     assert!(!status_line.contains("provider failed"));
-    assert!(text.contains("error provider cancelled"));
-    assert!(!text.contains("provider_cancelled"));
-    let (error_label_x, error_y) =
-        find_text_position_in_row(&buffer, status_y, "error provider cancelled")
-            .expect("error state is visible");
-    let error_value_x = error_label_x + "error ".chars().count() as u16;
-
-    assert_cell_style(
-        &buffer,
-        error_label_x,
-        error_y,
-        Color::Yellow,
-        Modifier::BOLD,
-    );
-    assert_eq!(buffer[(error_value_x, error_y)].fg, Color::Red);
     assert!(
-        buffer[(error_value_x, error_y)]
-            .modifier
-            .contains(Modifier::BOLD)
+        model
+            .status
+            .compact_line
+            .contains("error provider cancelled")
     );
+    assert!(!text.contains("error provider cancelled"));
+    assert!(!text.contains("provider_cancelled"));
+    assert!(status_line.trim().is_empty());
 }
 
 #[test]
@@ -3592,39 +3693,10 @@ fn renderer_acceptance_colors_status_values_by_semantic_state() {
     render_app_to_buffer(&model, &mut buffer);
     let status_y = model.layout.status.y;
     assert!(find_text_position_in_row(&buffer, status_y, "draft 14 chars").is_none());
-    let (queued_x, queued_y) =
-        find_text_position_in_row(&buffer, status_y, "queued operator steering 2")
-            .expect("queued operator steering status is visible");
-    let queued_operator_x = queued_x + "queued ".chars().count() as u16;
-    let queued_mode_x = queued_x + "queued operator ".chars().count() as u16;
-    let queued_value_x = queued_x + "queued operator steering ".chars().count() as u16;
-    let (held_x, held_y) = find_text_position_in_row(&buffer, status_y, "held system directives 1")
-        .expect("held system directives status is visible");
-    let held_system_x = held_x + "held ".chars().count() as u16;
-    let held_mode_x = held_x + "held system ".chars().count() as u16;
-    let held_value_x = held_x + "held system directives ".chars().count() as u16;
+    assert!(find_text_position_in_row(&buffer, status_y, "queued operator steering 2").is_none());
+    assert!(find_text_position_in_row(&buffer, status_y, "held system directives 1").is_none());
     assert!(find_text_position_in_row(&buffer, status_y, "provider disabled").is_none());
-
-    assert_eq!(buffer[(queued_x, queued_y)].fg, Color::Green);
-    assert_cell_style(
-        &buffer,
-        queued_operator_x,
-        queued_y,
-        Color::Green,
-        Modifier::BOLD,
-    );
-    assert_eq!(buffer[(queued_mode_x, queued_y)].fg, Color::Magenta);
-    assert_eq!(buffer[(queued_value_x, queued_y)].fg, Color::Magenta);
-    assert_eq!(buffer[(held_x, held_y)].fg, Color::Green);
-    assert_cell_style(
-        &buffer,
-        held_system_x,
-        held_y,
-        Color::LightMagenta,
-        Modifier::BOLD,
-    );
-    assert_eq!(buffer[(held_mode_x, held_y)].fg, Color::Magenta);
-    assert_eq!(buffer[(held_value_x, held_y)].fg, Color::Magenta);
+    assert!(content_row_is_blank(&buffer, status_y));
 }
 
 #[test]
@@ -3649,24 +3721,16 @@ fn renderer_acceptance_styles_session_and_transcript_status_as_neutral_scan_data
     render_app_to_buffer(&model, &mut buffer);
     let status_y = model.layout.status.y;
 
-    let (session_x, session_y) =
-        find_text_position_in_row(&buffer, status_y, "session carrier_fixture_1")
-            .expect("session status is visible");
-    let session_value_x = session_x + "session ".chars().count() as u16;
-    let (transcript_x, transcript_y) = find_text_position_in_row(&buffer, status_y, "transcript 4")
-        .expect("transcript status is visible");
-    let transcript_value_x = transcript_x + "transcript ".chars().count() as u16;
-
-    assert_cell_style(&buffer, session_x, session_y, Color::Yellow, Modifier::BOLD);
-    assert_eq!(buffer[(session_value_x, session_y)].fg, Color::Gray);
-    assert_cell_style(
-        &buffer,
-        transcript_x,
-        transcript_y,
-        Color::Yellow,
-        Modifier::BOLD,
+    assert!(
+        model
+            .status
+            .compact_line
+            .contains("session carrier_fixture_1")
     );
-    assert_eq!(buffer[(transcript_value_x, transcript_y)].fg, Color::Gray);
+    assert!(model.status.compact_line.contains("transcript 4"));
+    assert!(find_text_position_in_row(&buffer, status_y, "session carrier_fixture_1").is_none());
+    assert!(find_text_position_in_row(&buffer, status_y, "transcript 4").is_none());
+    assert!(content_row_is_blank(&buffer, status_y));
 }
 
 #[test]
@@ -3760,8 +3824,8 @@ fn renderer_acceptance_wraps_long_composer_draft_inside_composer_region() {
     assert_eq!(first_x, model.layout.composer.x + 1);
     assert_eq!(second_x, model.layout.composer.x + 1);
     assert_eq!(second_y, first_y + 1);
-    assert_eq!(buffer[(first_x, first_y)].fg, Color::Green);
-    assert_eq!(buffer[(second_x, second_y)].fg, Color::Green);
+    assert_eq!(buffer[(first_x, first_y)].fg, Color::White);
+    assert_eq!(buffer[(second_x, second_y)].fg, Color::White);
     assert!(first_y >= model.layout.composer.y);
     assert!(second_y < model.layout.composer.y + model.layout.composer.height);
 }
@@ -3815,8 +3879,8 @@ fn renderer_acceptance_renders_multiline_composer_draft_inside_composer_region()
         find_text_position(&buffer, "first pasted line").expect("first pasted line is visible");
     let (second_x, second_y) =
         find_text_position(&buffer, "second pasted line").expect("second pasted line is visible");
-    assert_eq!(buffer[(first_x, first_y)].fg, Color::Green);
-    assert_eq!(buffer[(second_x, second_y)].fg, Color::Green);
+    assert_eq!(buffer[(first_x, first_y)].fg, Color::White);
+    assert_eq!(buffer[(second_x, second_y)].fg, Color::White);
     assert!(first_y >= model.layout.composer.y);
     assert!(second_y >= model.layout.composer.y);
     assert!(first_y < model.layout.composer.y + model.layout.composer.height);
@@ -3869,8 +3933,8 @@ fn renderer_acceptance_preserves_explicit_empty_composer_draft_lines() {
     assert_eq!(third_x, model.layout.composer.x + 1);
     assert_eq!(third_y, first_y + 2);
     assert!(content_row_is_blank(&buffer, first_y + 1));
-    assert_eq!(buffer[(first_x, first_y)].fg, Color::Green);
-    assert_eq!(buffer[(third_x, third_y)].fg, Color::Green);
+    assert_eq!(buffer[(first_x, first_y)].fg, Color::White);
+    assert_eq!(buffer[(third_x, third_y)].fg, Color::White);
     assert!(third_y < model.layout.composer.y + model.layout.composer.height);
 }
 

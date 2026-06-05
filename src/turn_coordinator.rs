@@ -362,7 +362,7 @@ fn run_turn_worker_inner(
     next_event_index: &mut u64,
     cancellation: &ProviderCancellationToken,
 ) -> Result<CompletedTurn, String> {
-    const MAX_PROVIDER_FOLLOW_UP_ROUNDS: usize = 4;
+    const MAX_PROVIDER_FOLLOW_UP_ROUNDS: usize = 8;
     let mut current_input = input.clone();
     let mut output_evidence_count = 0usize;
     let mut final_provider_record: Option<ProviderDispatchRecord> = None;
@@ -441,7 +441,12 @@ fn run_turn_worker_inner(
         let has_follow_up = !follow_up_texts.is_empty()
             && matches!(provider_record.status, ProviderDispatchStatus::Completed);
         final_provider_record = Some(provider_record);
-        if !has_follow_up || round == MAX_PROVIDER_FOLLOW_UP_ROUNDS {
+        if has_follow_up && round == MAX_PROVIDER_FOLLOW_UP_ROUNDS {
+            return Err(format!(
+                "provider_follow_up_round_limit_exceeded:{MAX_PROVIDER_FOLLOW_UP_ROUNDS}"
+            ));
+        }
+        if !has_follow_up {
             break;
         }
         current_input = provider_follow_up_input(&input, round + 1, &follow_up_texts);
@@ -661,6 +666,44 @@ mod tests {
                     &input.content,
                 ),
                 outputs: Vec::new(),
+            }
+        }
+    }
+
+    struct AlwaysToolProviderAdapter;
+
+    impl ProviderAdapter for AlwaysToolProviderAdapter {
+        fn dispatch_request(
+            &self,
+            input: &InputEvent,
+            turn_id: &str,
+            _cancellation: &ProviderCancellationToken,
+        ) -> ProviderDispatchRecord {
+            ProviderDispatchRecord {
+                status: ProviderDispatchStatus::Completed,
+                provider_execution_enabled: true,
+                payload: create_provider_request_payload(
+                    turn_id,
+                    &input.event_id,
+                    "completed",
+                    true,
+                    "configured",
+                    "admitted",
+                    Some("always_tool_adapter".to_string()),
+                    None,
+                    None,
+                    None,
+                    true,
+                    "single_provider_output_batch",
+                    None,
+                    &input.content,
+                ),
+                outputs: vec![ProviderOutputRecord::tool_call_request(
+                    turn_id,
+                    "site_loop_run_once",
+                    "{}",
+                    1,
+                )],
             }
         }
     }
@@ -993,6 +1036,28 @@ mod tests {
         assert!(result.is_none());
         assert_eq!(queue.turn_state(), TurnState::Idle);
 
+        remove_file(path).ok();
+    }
+
+    #[test]
+    fn errors_when_provider_follow_up_round_limit_is_exceeded() {
+        let path = temp_session_path();
+        let mut input = parse_input_event(INPUT_FIXTURE).expect("input parses");
+        input.delivery_mode = DeliveryMode::AdmitAfterActiveTurn;
+        let mut queue = InputQueue::new();
+        queue.admit_input_event(input, false);
+        let mut coordinator = TurnCoordinator::with_provider_adapter_and_tool_executor(
+            &path,
+            context(),
+            Box::new(AlwaysToolProviderAdapter),
+            Box::new(WritingProviderToolCallExecutor),
+        );
+
+        let error = coordinator
+            .run_one_ready_turn(&mut queue, &clock())
+            .expect_err("follow-up loop limit should fail explicitly");
+
+        assert_eq!(error, "provider_follow_up_round_limit_exceeded:8");
         remove_file(path).ok();
     }
 

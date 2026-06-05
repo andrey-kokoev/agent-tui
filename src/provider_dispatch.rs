@@ -296,30 +296,16 @@ impl ProviderOutputRecord {
         tool_name: &str,
         arguments_summary: &str,
         sequence: u64,
-        sensitive: bool,
+        _sensitive: bool,
     ) -> Self {
-        let policy = default_payload_policy();
-        let payload_ref_id = format!("mcp_payload:provider_tool_args_{turn_id}_{sequence}@v1");
-        let decision = decide_payload_inline(
-            arguments_summary,
-            sensitive,
-            payload_ref_id,
-            if sensitive {
-                "sensitive provider tool arguments omitted from transcript"
-            } else {
-                "provider tool arguments omitted from transcript"
-            },
-            &policy,
-        );
-        let (arguments_summary, arguments_ref) = inline_text_or_ref(arguments_summary, decision);
         Self {
             kind: ProviderOutputKind::ToolCallRequest,
             payload: create_provider_tool_call_payload(
                 turn_id,
                 sequence,
                 tool_name,
-                &arguments_summary,
-                arguments_ref,
+                arguments_summary,
+                Value::Null,
             ),
         }
     }
@@ -1033,7 +1019,7 @@ mod tests {
         );
         assert_eq!(
             text.payload["text_delta_ref"]["reader_tool"],
-            "mcp_payload_read"
+            "mcp_payload_show"
         );
 
         let tool = ProviderOutputRecord::sensitive_tool_call_request(
@@ -1042,14 +1028,8 @@ mod tests {
             "secret args",
             2,
         );
-        assert_eq!(
-            tool.payload["arguments_summary"],
-            "sensitive provider tool arguments omitted from transcript"
-        );
-        assert_eq!(
-            tool.payload["arguments_ref"]["reader_tool"],
-            "mcp_payload_read"
-        );
+        assert_eq!(tool.payload["arguments_summary"], "secret args");
+        assert!(tool.payload["arguments_ref"].is_null());
     }
 
     #[test]
@@ -1073,6 +1053,20 @@ mod tests {
         assert_eq!(tool.payload["schema"], PROVIDER_OUTPUT_PAYLOAD_SCHEMA);
         assert_eq!(tool.payload["provider_output_kind"], "tool_call_request");
         assert_eq!(tool.payload["tool_name"], "site_loop_run_once");
+    }
+
+    #[test]
+    fn parses_paged_output_reader_tool_call_envelope() {
+        let (tool_name, arguments) = parse_narada_tool_call(
+            r#"{"narada_tool_call":{"name":"mcp_output_show","arguments":{"output_ref":"mcp_output:o_6cd77433e384445e976c7fdf"}}}"#,
+        )
+        .expect("reader tool envelope parses");
+
+        assert_eq!(tool_name, "mcp_output_show");
+        assert_eq!(
+            arguments,
+            r#"{"output_ref":"mcp_output:o_6cd77433e384445e976c7fdf"}"#
+        );
     }
 
     #[test]

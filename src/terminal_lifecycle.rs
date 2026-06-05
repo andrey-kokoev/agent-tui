@@ -416,6 +416,11 @@ mod tests {
 
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("Transcript"));
+        assert!(text.contains("sonar.resident: Thinking 1m 12s"));
+        assert!(text.contains("working"));
+        assert!(!text.contains("provider working"));
+        assert!(!text.contains("session carrier_1"));
+        assert!(!text.contains("transcript 1"));
         assert!(text.contains("operator note -> sonar.resident>"));
         assert!(!text.contains("Composer:"));
         assert!(text.contains("live steering note"));

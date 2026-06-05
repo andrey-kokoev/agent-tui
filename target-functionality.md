@@ -236,7 +236,7 @@ Format:
 
 This is UI shorthand for a carrier-mediated tool request. The requesting actor is the assistant model under agent identity. The tool execution actor is the carrier/runtime.
 
-Tool arguments and results follow the protocol payload reference rules. Large or sensitive arguments/results must use summaries plus `arguments_ref` or `result_ref`.
+Tool results follow the protocol payload reference rules. Provider tool-call arguments must remain executable inline unless a backing payload reader is available; result payloads may use summaries plus `result_ref`.
 
 ## Control JSONL
 

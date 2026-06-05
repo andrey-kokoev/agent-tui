@@ -49,6 +49,7 @@ struct ToolScenario {
     expected_tool_request_line: &'static str,
     expected_tool_result_line: &'static str,
     expected_final_agent_line: &'static str,
+    expected_follow_up_guidance: Option<&'static str>,
 }
 struct ScenarioProvider {
     scenario: ToolScenario,
@@ -101,6 +102,12 @@ impl ProviderAdapter for ScenarioProvider {
                 && input.content.contains(self.scenario.result_text),
             "provider follow-up input must include MCP result text"
         );
+        if let Some(expected_guidance) = self.scenario.expected_follow_up_guidance {
+            assert!(
+                input.content.contains(expected_guidance),
+                "provider follow-up input must include paged-output guidance"
+            );
+        }
         ProviderDispatchRecord {
             status: ProviderDispatchStatus::Completed,
             provider_execution_enabled: true,
@@ -223,6 +230,25 @@ fn final_frame_contains_operator_agent_tool_result_and_completion_for_startup_se
         expected_tool_request_line: "sonar.resident -> agent-tui: agent_context_startup_sequence({})",
         expected_tool_result_line: "agent-tui -> sonar.resident: ok agent_context_startup_sequence in 10ms · content_items=1",
         expected_final_agent_line: "sonar.resident: Startup sequence completed for sonar.resident.",
+        expected_follow_up_guidance: None,
+    });
+}
+
+#[test]
+fn final_frame_contains_answer_after_paged_startup_sequence_result() {
+    run_final_frame_tool_scenario(ToolScenario {
+        proof_slug: "paged_startup_sequence",
+        input_text: "run startup sequence",
+        server_name: "sonar-agent-context",
+        tool_name: "agent_context_startup_sequence",
+        arguments_summary: "{}",
+        result_summary: "content_items=1",
+        result_text: r#"{"status":"ok","truncated":true,"ref":"mcp_output:o_6cd77433e384445e976c7fdf","output_ref":"mcp_output:o_6cd77433e384445e976c7fdf","reader_tool":"mcp_output_show","inline_limit":200}"#,
+        expected_operator_line: "operator -> sonar.resident: run startup sequence",
+        expected_tool_request_line: "sonar.resident -> agent-tui: agent_context_startup_sequence({})",
+        expected_tool_result_line: "agent-tui -> sonar.resident: ok agent_context_startup_sequence in 10ms · content_items=1",
+        expected_final_agent_line: "sonar.resident: Startup sequence completed; paged details were not accessible through the provider surface.",
+        expected_follow_up_guidance: Some("emit exactly this JSON tool-call envelope"),
     });
 }
 
@@ -240,6 +266,7 @@ fn final_frame_contains_fs_mcp_tool_result() {
         expected_tool_request_line: "sonar.resident -> agent-tui: fs_read_file({\"path\":\"D:/code/narada.sonar/README.md\",\"limit\":20})",
         expected_tool_result_line: "agent-tui -> sonar.resident: ok fs_read_file in 10ms · content: README.md lines 1-20",
         expected_final_agent_line: "sonar.resident: README.md first twenty lines are available.",
+        expected_follow_up_guidance: None,
     });
 }
 
@@ -257,6 +284,7 @@ fn final_frame_contains_structured_command_mcp_tool_result() {
         expected_tool_request_line: "sonar.resident -> agent-tui: structured_command_execute({\"command\":\"cargo\",\"args\":[\"--version\"]})",
         expected_tool_result_line: "agent-tui -> sonar.resident: ok structured_command_execute in 10ms · exit_code=0 stdout=cargo 1.x",
         expected_final_agent_line: "sonar.resident: cargo 1.x executed successfully.",
+        expected_follow_up_guidance: None,
     });
 }
 

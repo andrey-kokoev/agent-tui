@@ -404,12 +404,12 @@ Payload reference shape:
 ```json
 {
   "payload_ref": "mcp_payload:<id>@v1",
-  "reader_tool": "mcp_payload_read",
+  "reader_tool": "mcp_payload_show",
   "summary": "large tool result omitted from transcript"
 }
 ```
 
-Canonical reader tool is `mcp_payload_read` for new carrier protocol records.
+Canonical reader tool is `mcp_payload_show` for new carrier protocol records. `mcp_payload_read` remains accepted for older records.
 
 Compatibility adapters may map existing `mcp_output_show` or other reader tools to the canonical shape.
 

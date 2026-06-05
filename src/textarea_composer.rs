@@ -342,7 +342,7 @@ fn cursor_position_in_wrapped_segments(
 }
 
 fn styled_textarea(mut textarea: TextArea<'static>) -> TextArea<'static> {
-    textarea.set_style(ui_theme::positive());
+    textarea.set_style(ui_theme::body());
     textarea.set_cursor_line_style(ui_theme::neutral_cursor_line());
     textarea.set_cursor_style(ui_theme::composer_cursor());
     textarea
@@ -368,7 +368,7 @@ mod tests {
             text: "run startup sequence".to_string(),
         });
 
-        assert_eq!(composer.textarea().style().fg, Some(Color::Green));
+        assert_eq!(composer.textarea().style().fg, Some(Color::White));
         assert_eq!(composer.textarea().cursor_style().fg, Some(Color::Black));
         assert_eq!(composer.textarea().cursor_style().bg, Some(Color::Green));
         assert_eq!(
@@ -384,7 +384,7 @@ mod tests {
         });
         let note_composer = composer.with_draft_style(ui_theme::warning_count());
 
-        assert_eq!(composer.textarea().style().fg, Some(Color::Green));
+        assert_eq!(composer.textarea().style().fg, Some(Color::White));
         assert_eq!(note_composer.textarea().style().fg, Some(Color::Magenta));
         assert!(
             note_composer

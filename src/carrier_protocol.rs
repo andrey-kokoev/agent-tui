@@ -725,7 +725,9 @@ fn validate_payload_ref(payload_ref: &PayloadRef) -> Result<(), String> {
     if !is_valid_payload_ref(&payload_ref.payload_ref) {
         return Err("invalid_payload_ref".to_string());
     }
-    if payload_ref.reader_tool != "mcp_payload_read" && payload_ref.reader_tool != "mcp_output_show"
+    if payload_ref.reader_tool != "mcp_payload_read"
+        && payload_ref.reader_tool != "mcp_payload_show"
+        && payload_ref.reader_tool != "mcp_output_show"
     {
         return Err(format!("invalid_reader_tool:{}", payload_ref.reader_tool));
     }
@@ -1277,6 +1279,10 @@ mod tests {
         ))
         .expect("payload ref fixture parses");
         assert_eq!(payload_ref.reader_tool, "mcp_payload_read");
+
+        let payload_show_ref = r#"{"schema":"narada.carrier.payload_ref.v1","payload_ref":"mcp_payload:payload_abc@v1","reader_tool":"mcp_payload_show","summary":"payload"}"#;
+        let parsed = parse_payload_ref(payload_show_ref).expect("mcp_payload_show ref parses");
+        assert_eq!(parsed.reader_tool, "mcp_payload_show");
     }
 
     #[test]
