@@ -597,18 +597,12 @@ fn run_codex_subscription_request(
     if prompt.trim().is_empty() {
         return ProviderExecutionResult::Failed("codex_subscription_prompt_missing".to_string());
     }
-    let cwd = match env::var("NARADA_SITE_ROOT")
+    let Some(cwd) = env::var("NARADA_SITE_ROOT")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .map(PathBuf::from)
-        .or_else(|| env::current_dir().ok())
-    {
-        Some(cwd) => cwd,
-        None => {
-            return ProviderExecutionResult::Failed(
-                "codex_subscription_cwd_unavailable".to_string(),
-            );
-        }
+    else {
+        return ProviderExecutionResult::Failed("codex_subscription_site_root_missing".to_string());
     };
     let command = codex_command();
     let mut args = vec![
@@ -913,7 +907,8 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
-    const INPUT_FIXTURE: &str = include_str!("../carrier-protocol/fixtures/input-event.json");
+    const INPUT_FIXTURE: &str =
+        include_str!("../../narada/packages/carrier-protocol/fixtures/input-event.json");
     fn set_test_env_var(key: &str, value: impl AsRef<std::ffi::OsStr>) {
         // Tests that mutate process environment hold ENV_LOCK, so no other test in
         // this module observes a partially-restored provider runtime environment.
@@ -999,6 +994,36 @@ mod tests {
     }
 
     #[test]
+    fn codex_subscription_requires_explicit_site_root() {
+        let _guard = ENV_LOCK.lock().expect("provider env lock");
+        let previous_site_root = env::var("NARADA_SITE_ROOT").ok();
+        remove_test_env_var("NARADA_SITE_ROOT");
+        let request = ProviderAdapterRequest {
+            turn_id: "turn_1".to_string(),
+            input_event_id: "input_1".to_string(),
+            content_preview: "answer with provider text".to_string(),
+            provider_runtime_status: "admitted".to_string(),
+            provider: Some(admitted_provider().to_string()),
+            model: Some("gpt-5.5".to_string()),
+            thinking: None,
+            stream: true,
+        };
+        let mut sink = NoopProviderOutputSink;
+
+        let result =
+            run_codex_subscription_request(&request, &ProviderCancellationToken::new(), &mut sink);
+
+        if let Some(previous) = previous_site_root {
+            set_test_env_var("NARADA_SITE_ROOT", previous);
+        }
+
+        assert!(matches!(
+            result,
+            ProviderExecutionResult::Failed(error) if error == "codex_subscription_site_root_missing"
+        ));
+    }
+
+    #[test]
     fn provider_dispatch_statuses_have_canonical_strings() {
         assert_eq!(
             ProviderDispatchStatus::RecordedNotDispatched.as_str(),
@@ -1057,10 +1082,13 @@ mod tests {
 
     #[test]
     fn parses_paged_output_reader_tool_call_envelope() {
-        let (tool_name, arguments) = parse_narada_tool_call(
-            r#"{"narada_tool_call":{"name":"mcp_output_show","arguments":{"output_ref":"mcp_output:o_6cd77433e384445e976c7fdf"}}}"#,
-        )
-        .expect("reader tool envelope parses");
+        let envelope_fixture: Value = serde_json::from_str(include_str!(
+            "../../narada/packages/carrier-provider-contract/contracts/narada-tool-call-envelope.json"
+        ))
+        .expect("shared narada tool-call envelope fixture parses");
+        let envelope = envelope_fixture["example"].to_string();
+        let (tool_name, arguments) =
+            parse_narada_tool_call(&envelope).expect("reader tool envelope parses");
 
         assert_eq!(tool_name, "mcp_output_show");
         assert_eq!(
@@ -1068,7 +1096,6 @@ mod tests {
             r#"{"output_ref":"mcp_output:o_6cd77433e384445e976c7fdf"}"#
         );
     }
-
     #[test]
     fn provider_adapter_request_has_stable_dispatch_payload_shape() {
         let input = parse_input_event(INPUT_FIXTURE).expect("input parses");

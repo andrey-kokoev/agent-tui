@@ -388,7 +388,7 @@ fn humanize_token(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::carrier_protocol::{SESSION_EVENT_SCHEMA, SessionEvent};
+    use crate::carrier_protocol::{SESSION_EVENT_SCHEMA, SessionEvent, parse_session_event};
     use serde_json::json;
 
     fn event(event_kind: SessionEventKind, payload: serde_json::Value) -> SessionEvent {
@@ -402,6 +402,79 @@ mod tests {
             site_id: "narada-sonar".to_string(),
             site_root: "D:/code/narada.sonar".to_string(),
             payload,
+        }
+    }
+
+    fn read_shared_protocol_fixture(name: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("narada")
+            .join("packages")
+            .join("carrier-protocol")
+            .join("fixtures")
+            .join(name);
+        std::fs::read_to_string(path).expect("shared protocol fixture reads")
+    }
+
+    #[test]
+    fn shared_transcript_projection_cases_project_stable_session_fixtures() {
+        let cases: serde_json::Value = serde_json::from_str(&read_shared_protocol_fixture(
+            "transcript-projection-cases.json",
+        ))
+        .expect("shared transcript projection cases parse");
+        assert_eq!(
+            cases.get("schema").and_then(serde_json::Value::as_str),
+            Some("narada.carrier.transcript_projection_cases.v1")
+        );
+        for case in cases
+            .get("cases")
+            .and_then(serde_json::Value::as_array)
+            .expect("projection cases are listed")
+        {
+            let fixture_name = case
+                .get("fixture")
+                .and_then(serde_json::Value::as_str)
+                .expect("fixture name is present");
+            let event = parse_session_event(&read_shared_protocol_fixture(fixture_name))
+                .expect("session event fixture parses");
+            let item = project_session_event(&event).unwrap_or_else(|| {
+                panic!(
+                    "projection missing for {}",
+                    case.get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("unnamed")
+                )
+            });
+            assert_eq!(
+                format!("{:?}", item.kind),
+                case.get("expected_kind")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap()
+            );
+            assert_eq!(
+                item.actor.as_str(),
+                case.get("expected_actor")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap()
+            );
+            assert_eq!(
+                item.turn_id,
+                case.get("expected_turn_id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap()
+            );
+            assert_eq!(
+                item.text,
+                case.get("expected_text")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap()
+            );
+            if let Some(sequence) = case
+                .get("expected_sequence")
+                .and_then(serde_json::Value::as_u64)
+            {
+                assert_eq!(item.sequence, Some(sequence));
+            }
         }
     }
 

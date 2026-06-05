@@ -414,23 +414,9 @@ mod tests {
     use crate::carrier_protocol::SessionEventKind;
 
     fn config_json() -> &'static str {
-        r#"{
-          "schema": "narada.mcp.carrier_client_config.v0",
-          "site_id": "narada-sonar",
-          "carrier": "agent-tui",
-          "mcpServers": {
-            "sonar-site-loop": {
-              "transport": "stdio",
-              "command": "node",
-              "args": ["site-loop.mjs"],
-              "env": {"NARADA_SITE_ROOT": "D:/code/narada.sonar"},
-              "env_vars": ["NARADA_AGENT_ID"],
-              "tools": ["site_loop_run_once", "site_loop_status"],
-              "surface_id": "sonar.site-loop",
-              "target_site_root": "D:/code/narada.sonar"
-            }
-          }
-        }"#
+        include_str!(
+            "../../narada/packages/mcp-fabric/fixtures/agent-tui-carrier-client-config.json"
+        )
     }
 
     fn context() -> SessionEvidenceContext {

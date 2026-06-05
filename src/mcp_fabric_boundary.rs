@@ -215,6 +215,13 @@ mod tests {
         ))
     }
 
+    fn action_admission_fixture() -> serde_json::Value {
+        serde_json::from_str(include_str!(
+            "../../narada/packages/carrier-action-admission/fixtures/classification-cases.json"
+        ))
+        .expect("shared action-admission fixture parses")
+    }
+
     #[test]
     fn default_boundary_disables_tool_visibility() {
         let boundary = McpFabricBoundary::disabled_until_admitted();
@@ -259,6 +266,54 @@ mod tests {
                 .expect_err("not visible"),
             "mcp_tool_not_visible:shell_exec:site_mcp_policy_fixture"
         );
+    }
+
+    #[test]
+    fn shared_action_admission_fixture_drives_tui_tool_visibility_boundary() {
+        let fixture = action_admission_fixture();
+        assert_eq!(
+            fixture.get("schema").and_then(serde_json::Value::as_str),
+            Some("narada.carrier_action_admission.classification_cases.v1")
+        );
+        for case in fixture
+            .get("tui_boundary_cases")
+            .and_then(serde_json::Value::as_array)
+            .expect("tui boundary cases are listed")
+        {
+            let allowed_tools = case
+                .get("allowed_tools")
+                .and_then(serde_json::Value::as_array)
+                .expect("allowed tools are listed")
+                .iter()
+                .filter_map(serde_json::Value::as_str);
+            let boundary = McpFabricBoundary::admitted(McpFabricPolicy::from_allowed_tools(
+                "D:/code/narada.sonar/.ai/mcp",
+                "shared_action_admission_fixture",
+                allowed_tools,
+            ));
+            let tool_name = case
+                .get("tool_name")
+                .and_then(serde_json::Value::as_str)
+                .expect("tool name is present");
+            let expected_access = case
+                .get("expected_access")
+                .and_then(serde_json::Value::as_str)
+                .expect("expected access is present");
+            match expected_access {
+                "ok" => assert!(boundary.assert_tool_access(tool_name).is_ok()),
+                expected_prefix => assert!(
+                    boundary
+                        .assert_tool_access(tool_name)
+                        .expect_err("tool access rejected")
+                        .starts_with(expected_prefix),
+                    "case {} should reject with prefix {}",
+                    case.get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("unnamed"),
+                    expected_prefix
+                ),
+            }
+        }
     }
 
     #[test]

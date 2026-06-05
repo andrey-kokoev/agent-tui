@@ -2,7 +2,8 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
-const LAUNCH_SLICE_CONTRACT_JSON: &str = include_str!("../contracts/launch-slice.json");
+const LAUNCH_SLICE_CONTRACT_JSON: &str =
+    include_str!("../../narada/packages/carrier-runtime-contract/contracts/launch-slice.json");
 const EXPECTED_SCHEMA: &str = "narada.agent_tui.launch_slice_contract.v0";
 const EXPECTED_ADMITTED_RUNTIME_SLICE: &str = "terminal_interactive_loop";
 const EXPECTED_CARRIER_FLAG: &str = "--interactive-loop";

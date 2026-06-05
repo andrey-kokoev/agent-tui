@@ -610,7 +610,8 @@ mod tests {
     use std::thread;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    const INPUT_FIXTURE: &str = include_str!("../carrier-protocol/fixtures/input-event.json");
+    const INPUT_FIXTURE: &str =
+        include_str!("../../narada/packages/carrier-protocol/fixtures/input-event.json");
 
     fn temp_session_path() -> PathBuf {
         let unique = SystemTime::now()

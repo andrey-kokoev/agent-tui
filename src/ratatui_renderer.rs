@@ -275,7 +275,7 @@ fn active_turn_marker_text(model: &AppViewModel) -> Option<String> {
         .iter()
         .find(|segment| segment.key == "turn_state")
         .map(|segment| turn_state_display_value(&segment.value))?;
-    turn_marker_text(&value)
+    turn_marker_text(&value, model)
 }
 
 fn latest_row_can_host_active_marker(row: &TranscriptRow) -> bool {
@@ -294,7 +294,7 @@ fn attach_active_marker_to_latest_block(
         return false;
     };
     let mut spans = label_line.spans.clone();
-    spans.push(Span::styled(" ".to_string(), muted_style()));
+    spans.push(Span::styled(" | ".to_string(), muted_style()));
     spans.push(Span::styled(marker.to_string(), muted_style()));
     if span_text_len(&spans) <= width {
         *label_line = Line::from(spans);
@@ -317,38 +317,62 @@ fn active_turn_marker_block(
     marker: &str,
     width: usize,
 ) -> Vec<Line<'static>> {
+    let separator = ": | ";
+    let separator_width = separator.chars().count();
     let marker_len = marker.chars().count();
-    if marker_len >= width {
-        return vec![Line::from(Span::styled(
-            truncate_text(marker, width),
-            muted_style(),
-        ))];
-    }
-    let separator_width = 2;
     if width <= marker_len + separator_width {
-        return vec![Line::from(Span::styled(marker.to_string(), muted_style()))];
+        if width <= separator_width + 1 {
+            return vec![Line::from(Span::styled(
+                truncate_text(marker, width),
+                muted_style(),
+            ))];
+        }
+        let identity_width = (width / 2).max(1);
+        let marker_width = width
+            .saturating_sub(identity_width + separator_width)
+            .max(1);
+        return vec![Line::from(vec![
+            Span::styled(
+                truncate_text(agent_identity, identity_width),
+                agent_label_style(),
+            ),
+            Span::styled(separator.to_string(), muted_style()),
+            Span::styled(truncate_text(marker, marker_width), muted_style()),
+        ])];
     }
     let identity_width = width - marker_len - separator_width;
     let mut spans = vec![Span::styled(
         truncate_text(agent_identity, identity_width),
         agent_label_style(),
     )];
-    spans.push(Span::styled(": ".to_string(), muted_style()));
+    spans.push(Span::styled(separator.to_string(), muted_style()));
     spans.push(Span::styled(marker.to_string(), muted_style()));
     vec![Line::from(spans)]
 }
 
-fn turn_marker_text(value: &str) -> Option<String> {
-    if value == "thinking" {
-        return Some("Thinking".to_string());
+fn turn_marker_text(value: &str, model: &AppViewModel) -> Option<String> {
+    let phase = if value == "thinking" {
+        Some("thinking".to_string())
+    } else if let Some(detail) = value.strip_prefix("thinking ") {
+        Some(format!("thinking {detail}"))
+    } else if let Some(detail) = value.strip_prefix("calling ") {
+        Some(format!("calling {detail}"))
+    } else {
+        significant_turn_state_marker(value)
+    }?;
+    Some(format!(
+        "{phase} · {} · {}",
+        model.composer.submit_hint,
+        interrupt_hint_with_to(&model.composer.interrupt_hint)
+    ))
+}
+
+fn interrupt_hint_with_to(value: &str) -> String {
+    if value == "Esc interrupt" {
+        "Esc to interrupt".to_string()
+    } else {
+        value.to_string()
     }
-    if let Some(detail) = value.strip_prefix("thinking ") {
-        return Some(format!("Thinking {detail}"));
-    }
-    value
-        .strip_prefix("calling ")
-        .map(|detail| format!("Calling {detail}"))
-        .or_else(|| significant_turn_state_marker(value))
 }
 
 fn significant_turn_state_marker(value: &str) -> Option<String> {
@@ -3054,7 +3078,10 @@ mod tests {
 
         render_app_to_buffer(&model, &mut buffer);
 
-        assert!(buffer_text(&buffer).contains("sonar.resident: Thinking 8s"));
+        assert!(
+            buffer_text(&buffer)
+                .contains("sonar.resident: | thinking 8s · Enter queues note · Esc to interrupt")
+        );
     }
 
     #[test]
@@ -3073,11 +3100,18 @@ mod tests {
         render_app_to_buffer(&model, &mut buffer);
         let text = buffer_text(&buffer);
 
-        assert!(!text.contains("Already responding.\n\nsonar.resident: Thinking 8s"));
+        assert!(!text.contains(
+            "Already responding.\n\nsonar.resident: | thinking 8s · Enter queues note · Esc to interrupt"
+        ));
         assert!(text.contains("Already responding."));
-        assert!(text.contains("sonar.resident: Thinking 8s"));
-        let (_, label_y) = find_text_position(&buffer, "sonar.resident: Thinking 8s")
-            .expect("thinking marker is attached to the agent label");
+        assert!(
+            text.contains("sonar.resident: | thinking 8s · Enter queues note · Esc to interrupt")
+        );
+        let (_, label_y) = find_text_position(
+            &buffer,
+            "sonar.resident: | thinking 8s · Enter queues note · Esc to interrupt",
+        )
+        .expect("thinking marker is attached to the agent label");
         let (_, body_y) = find_text_position(&buffer, "Already responding.")
             .expect("agent response body is rendered");
         let (_, timestamp_y) = find_text_position(&buffer, "2026-05-30Z00:00")
@@ -3111,12 +3145,12 @@ mod tests {
         let text = buffer_text(&buffer);
 
         assert!(text.contains("narada-timour-marketing-agent.builder2:"));
-        assert!(text.contains("  Thinking 8s"));
+        assert!(text.contains("  thinking 8s · Enter queues note"));
         assert!(text.contains("Already responding."));
         let (_, label_y) = find_text_position(&buffer, "narada-timour-marketing-agent.builder2:")
             .expect("long agent label is rendered");
-        let (_, marker_y) =
-            find_text_position(&buffer, "Thinking 8s").expect("thinking marker is rendered");
+        let (_, marker_y) = find_text_position(&buffer, "thinking 8s · Enter queues note")
+            .expect("thinking marker is rendered");
         let (_, body_y) = find_text_position(&buffer, "Already responding.")
             .expect("agent response body is rendered");
         assert_eq!(marker_y, label_y + 1);
@@ -3145,12 +3179,17 @@ mod tests {
         let text = buffer_text(&buffer);
 
         assert!(text.contains("sonar.resident -> agent-tui: site_loop_run_once({})"));
-        assert!(text.contains("  Calling site_loop_run_once 8s"));
-        assert!(!text.contains("site_loop_run_once({})\n\nsonar.resident: Calling"));
+        assert!(
+            text.contains("  calling site_loop_run_once 8s · Enter queues note · Esc to interrupt")
+        );
+        assert!(!text.contains("site_loop_run_once({})\n\nsonar.resident: | calling"));
         let (_, tool_y) = find_text_position(&buffer, "site_loop_run_once({})")
             .expect("tool call request is rendered");
-        let (_, marker_y) = find_text_position(&buffer, "Calling site_loop_run_once 8s")
-            .expect("active tool-call marker is rendered");
+        let (_, marker_y) = find_text_position(
+            &buffer,
+            "calling site_loop_run_once 8s · Enter queues note · Esc to interrupt",
+        )
+        .expect("active tool-call marker is rendered");
         assert_eq!(marker_y, tool_y + 1);
     }
 
@@ -3175,10 +3214,12 @@ mod tests {
         render_app_to_buffer(&model, &mut buffer);
         let text = buffer_text(&buffer);
 
-        assert!(text.contains("sonar.resident: Interrupted"));
+        assert!(
+            text.contains("sonar.resident: | Interrupted · Enter queues note · Esc to interrupt")
+        );
         assert!(text.contains("Provider stopped before finishing."));
         assert!(
-            !text.contains("Provider stopped before finishing.\n\nsonar.resident: Interrupted")
+            !text.contains("Provider stopped before finishing.\n\nsonar.resident: | Interrupted")
         );
     }
 
@@ -3195,7 +3236,9 @@ mod tests {
         render_app_to_buffer(&model, &mut buffer);
         let text = buffer_text(&buffer);
 
-        assert!(text.contains("sonar.resident: Provider Cancelled"));
+        assert!(text.contains(
+            "sonar.resident: | Provider Cancelled · Enter queues note · Esc to interrupt"
+        ));
         assert!(!text.contains("provider_cancelled"));
     }
 
@@ -3215,8 +3258,7 @@ mod tests {
         render_app_to_buffer(&model, &mut buffer);
         let text = buffer_text(&buffer);
 
-        assert!(text.contains("Thinking 8s"));
-        assert!(text.contains("narada-timour-mark...: Thinking 8s"));
+        assert!(text.contains(": | thinking"));
     }
 
     #[test]

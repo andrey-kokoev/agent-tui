@@ -2,7 +2,8 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
-const MCP_RUNTIME_CONTRACT_JSON: &str = include_str!("../contracts/mcp-runtime.json");
+const MCP_RUNTIME_CONTRACT_JSON: &str =
+    include_str!("../../narada/packages/carrier-runtime-contract/contracts/mcp-runtime.json");
 const EXPECTED_SCHEMA: &str = "narada.agent_tui.mcp_runtime_contract.v0";
 const EXPECTED_MCP_FABRIC_ENV_VAR: &str = "NARADA_AGENT_TUI_ENABLE_MCP_FABRIC";
 const EXPECTED_MCP_CONFIG_ENV_VAR: &str = "NARADA_AGENT_TUI_MCP_CONFIG";

@@ -287,19 +287,22 @@ impl ReusableMcpProcess {
         prepared: &McpFabricPreparedToolCall,
         handshake_timeout_ms: u64,
     ) -> Result<Self, String> {
-        let mut child = Command::new(&prepared.command)
+        let mut command = Command::new(&prepared.command);
+        command
             .args(&prepared.args)
             .envs(&prepared.env)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| {
-                format!(
-                    "mcp_reusable_process_spawn_failed:{}:{error}",
-                    prepared.server_name
-                )
-            })?;
+            .stderr(Stdio::piped());
+        if let Some(site_root) = prepared.env.get("NARADA_SITE_ROOT") {
+            command.current_dir(std::path::Path::new(site_root));
+        }
+        let mut child = command.spawn().map_err(|error| {
+            format!(
+                "mcp_reusable_process_spawn_failed:{}:{error}",
+                prepared.server_name
+            )
+        })?;
         let mut stdin = child.stdin.take().ok_or_else(|| {
             format!(
                 "mcp_reusable_process_stdin_unavailable:{}",
@@ -352,7 +355,9 @@ mod tests {
     use crate::carrier_protocol::{SESSION_EVENT_SCHEMA, SessionEvent, SessionEventKind};
     use crate::mcp_json_rpc::McpJsonRpcExchange;
     use serde_json::json;
+    use std::fs;
     use std::io::Cursor;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn prepared(server_name: &str, command: &str, args: Vec<String>) -> McpFabricPreparedToolCall {
         McpFabricPreparedToolCall {
@@ -471,6 +476,69 @@ mod tests {
         executor.stop_server("missing");
 
         assert_eq!(executor.process_count(), 0);
+    }
+
+    #[test]
+    fn reusable_process_uses_site_root_as_working_directory() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock works")
+            .as_nanos();
+        let site_root =
+            std::env::temp_dir().join(format!("narada-agent-tui-reusable-cwd-{unique}"));
+        fs::create_dir_all(&site_root).expect("create temp site root");
+        let script_path =
+            std::env::temp_dir().join(format!("narada-agent-tui-reusable-cwd-{unique}.mjs"));
+        fs::write(
+            &script_path,
+            r#"
+process.stdin.setEncoding('utf8');
+let input = '';
+process.stdin.on('data', chunk => {
+  input += chunk;
+  let newline;
+  while ((newline = input.indexOf('\n')) !== -1) {
+    const line = input.slice(0, newline);
+    input = input.slice(newline + 1);
+    if (!line.trim()) continue;
+    const request = JSON.parse(line);
+    if (request.method === 'initialize') {
+      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: {}, serverInfo: { name: 'cwd-test', version: '0.0.0' } } }) + '\n');
+      continue;
+    }
+    if (request.method === 'notifications/initialized') continue;
+    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: process.cwd() }] } }) + '\n');
+  }
+});
+"#,
+        )
+        .expect("write temp mcp script");
+        let mut prepared = prepared(
+            "cwd-server",
+            "node",
+            vec![script_path.display().to_string()],
+        );
+        prepared.env.insert(
+            "NARADA_SITE_ROOT".to_string(),
+            site_root.display().to_string(),
+        );
+        let mut executor = ReusableMcpProcessExecutor::default();
+
+        let result = executor
+            .execute_tool_call(&prepared)
+            .expect("reusable exchange succeeds");
+        executor.stop_all();
+
+        let response: serde_json::Value =
+            serde_json::from_str(result.response_line.trim()).expect("response is json");
+        let cwd = response["result"]["content"][0]["text"]
+            .as_str()
+            .expect("cwd text is present");
+        let actual_cwd = fs::canonicalize(cwd).expect("cwd canonicalizes");
+        let expected_cwd = fs::canonicalize(&site_root).expect("site root canonicalizes");
+        let _ = fs::remove_file(&script_path);
+        let _ = fs::remove_dir(&site_root);
+        assert_eq!(actual_cwd, expected_cwd);
     }
 
     #[test]

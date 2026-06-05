@@ -380,8 +380,9 @@ mod tests {
     };
 
     const CONTROL_FIXTURE: &str =
-        include_str!("../carrier-protocol/fixtures/control-input-event.json");
-    const INPUT_FIXTURE: &str = include_str!("../carrier-protocol/fixtures/input-event.json");
+        include_str!("../../narada/packages/carrier-protocol/fixtures/control-input-event.json");
+    const INPUT_FIXTURE: &str =
+        include_str!("../../narada/packages/carrier-protocol/fixtures/input-event.json");
 
     fn evidence_context() -> SessionEvidenceContext {
         SessionEvidenceContext {

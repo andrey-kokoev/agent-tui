@@ -470,7 +470,7 @@ mod tests {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     const CONTROL_FIXTURE: &str =
-        include_str!("../carrier-protocol/fixtures/control-input-event.json");
+        include_str!("../../narada/packages/carrier-protocol/fixtures/control-input-event.json");
 
     #[derive(Debug, Default)]
     struct FakeBridge {

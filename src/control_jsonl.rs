@@ -40,7 +40,7 @@ mod tests {
     use super::*;
 
     const CONTROL_FIXTURE: &str =
-        include_str!("../carrier-protocol/fixtures/control-input-event.json");
+        include_str!("../../narada/packages/carrier-protocol/fixtures/control-input-event.json");
 
     #[test]
     fn parses_valid_control_jsonl_lines() {

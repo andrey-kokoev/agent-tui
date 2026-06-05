@@ -1146,7 +1146,9 @@ fn renderer_acceptance_keeps_active_chat_frame_coherent_without_status_noise() {
     render_app_to_buffer(&model, &mut buffer);
     let text = buffer_text(&buffer);
 
-    assert!(text.contains("narada-revolution.resident: Thinking 16s"));
+    assert!(text.contains(
+        "narada-revolution.resident: | thinking 16s · Enter queues note · Esc to interrupt"
+    ));
     assert!(text.contains("I'll read the startup output reference now."));
     assert!(!text.contains("provider configured"));
     assert!(!text.contains("provider adapter admitted"));
@@ -3299,7 +3301,7 @@ fn renderer_acceptance_prioritizes_status_segments_in_narrow_width() {
     let text = buffer_text(&buffer);
 
     assert!(text.contains("sonar.resident"));
-    assert!(!text.contains("thinking 1m 12s"));
+    assert!(!model.status.compact_line.contains("thinking 1m 12s"));
     assert!(
         model
             .status

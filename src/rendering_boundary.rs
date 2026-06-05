@@ -230,6 +230,57 @@ mod tests {
         assert!(record.message.contains("state preserved"));
     }
 
+    fn action_admission_fixture() -> serde_json::Value {
+        serde_json::from_str(include_str!(
+            "../../narada/packages/carrier-action-admission/fixtures/classification-cases.json"
+        ))
+        .expect("shared action-admission fixture parses")
+    }
+
+    #[test]
+    fn shared_action_admission_payload_cases_drive_inline_ref_boundary() {
+        let fixture = action_admission_fixture();
+        let policy = default_payload_policy();
+        for case in fixture
+            .get("payload_cases")
+            .and_then(serde_json::Value::as_array)
+            .expect("payload cases are listed")
+        {
+            let content = case
+                .get("content")
+                .and_then(serde_json::Value::as_str)
+                .expect("content is present");
+            let sensitive = case
+                .get("sensitive")
+                .and_then(serde_json::Value::as_bool)
+                .expect("sensitive flag is present");
+            let decision = decide_payload_inline(
+                content,
+                sensitive,
+                "mcp_payload:shared_fixture@v1",
+                "shared fixture payload",
+                &policy,
+            );
+            match case
+                .get("expected_decision")
+                .and_then(serde_json::Value::as_str)
+                .expect("expected decision is present")
+            {
+                "inline" => assert!(matches!(decision, InlinePayloadDecision::Inline)),
+                "requires_ref" => match decision {
+                    InlinePayloadDecision::RequiresRef(payload_ref) => assert_eq!(
+                        payload_ref.reader_tool,
+                        case.get("expected_reader_tool")
+                            .and_then(serde_json::Value::as_str)
+                            .expect("expected reader tool is present")
+                    ),
+                    InlinePayloadDecision::Inline => panic!("payload should require ref"),
+                },
+                unexpected => panic!("unexpected payload fixture decision: {unexpected}"),
+            }
+        }
+    }
+
     #[test]
     fn payload_policy_requires_refs_for_large_or_sensitive_content() {
         let policy = default_payload_policy();

@@ -877,7 +877,7 @@ mod tests {
     #[test]
     fn parses_shared_input_event_fixture() {
         let event = parse_input_event(include_str!(
-            "../carrier-protocol/fixtures/input-event.json"
+            "../../narada/packages/carrier-protocol/fixtures/input-event.json"
         ))
         .expect("input fixture parses");
         assert_eq!(event.source_kind, SourceKind::Operator);
@@ -889,7 +889,7 @@ mod tests {
     #[test]
     fn parses_shared_control_input_event_fixture() {
         let event = parse_control_input_event(include_str!(
-            "../carrier-protocol/fixtures/control-input-event.json"
+            "../../narada/packages/carrier-protocol/fixtures/control-input-event.json"
         ))
         .expect("control fixture parses");
         assert_eq!(event.input.source_kind, SourceKind::System);
@@ -901,7 +901,11 @@ mod tests {
 
     fn read_shared_session_event_fixture(name: &str) -> String {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("carrier-protocol/fixtures")
+            .join("..")
+            .join("narada")
+            .join("packages")
+            .join("carrier-protocol")
+            .join("fixtures")
             .join(name);
         std::fs::read_to_string(path).expect("shared session fixture reads")
     }
@@ -964,7 +968,7 @@ mod tests {
     #[test]
     fn parses_shared_session_event_fixture() {
         let event = parse_session_event(include_str!(
-            "../carrier-protocol/fixtures/session-event.json"
+            "../../narada/packages/carrier-protocol/fixtures/session-event.json"
         ))
         .expect("session fixture parses");
         assert_eq!(event.event_kind, SessionEventKind::InputAdmittedToTurn);
@@ -1004,7 +1008,7 @@ mod tests {
     #[test]
     fn parses_shared_input_lifecycle_session_event_fixtures() {
         let queued = parse_session_event(include_str!(
-            "../carrier-protocol/fixtures/input-queued-session-event.json"
+            "../../narada/packages/carrier-protocol/fixtures/input-queued-session-event.json"
         ))
         .expect("input queued session fixture parses");
         assert_eq!(
@@ -1014,14 +1018,14 @@ mod tests {
         assert_eq!(queued.payload["queue_state"], "queued_for_turn_boundary");
 
         let dropped = parse_session_event(include_str!(
-            "../carrier-protocol/fixtures/input-dropped-session-event.json"
+            "../../narada/packages/carrier-protocol/fixtures/input-dropped-session-event.json"
         ))
         .expect("input dropped session fixture parses");
         assert_eq!(dropped.event_kind, SessionEventKind::InputDroppedByOperator);
         assert_eq!(dropped.payload["drop_reason"], "operator_queue_drop");
 
         let abandoned = parse_session_event(include_str!(
-            "../carrier-protocol/fixtures/input-abandoned-session-event.json"
+            "../../narada/packages/carrier-protocol/fixtures/input-abandoned-session-event.json"
         ))
         .expect("input abandoned session fixture parses");
         assert_eq!(
@@ -1031,21 +1035,21 @@ mod tests {
         assert_eq!(abandoned.payload["input_event_id"], "input_fixture_1");
 
         let completed = parse_session_event(include_str!(
-            "../carrier-protocol/fixtures/input-completed-session-event.json"
+            "../../narada/packages/carrier-protocol/fixtures/input-completed-session-event.json"
         ))
         .expect("input completed session fixture parses");
         assert_eq!(completed.event_kind, SessionEventKind::InputCompleted);
         assert_eq!(completed.payload["terminal_state"], "completed");
 
         let turn_started = parse_session_event(include_str!(
-            "../carrier-protocol/fixtures/turn-started-session-event.json"
+            "../../narada/packages/carrier-protocol/fixtures/turn-started-session-event.json"
         ))
         .expect("turn started session fixture parses");
         assert_eq!(turn_started.event_kind, SessionEventKind::TurnStarted);
         assert_eq!(turn_started.payload["turn_id"], "turn_fixture_1");
 
         let interrupt = parse_session_event(include_str!(
-            "../carrier-protocol/fixtures/interrupt-requested-session-event.json"
+            "../../narada/packages/carrier-protocol/fixtures/interrupt-requested-session-event.json"
         ))
         .expect("interrupt requested session fixture parses");
         assert_eq!(interrupt.event_kind, SessionEventKind::InterruptRequested);
@@ -1055,7 +1059,7 @@ mod tests {
     #[test]
     fn parses_shared_turn_terminal_session_event_fixture() {
         let event = parse_session_event(include_str!(
-            "../carrier-protocol/fixtures/turn-terminal-session-event.json"
+            "../../narada/packages/carrier-protocol/fixtures/turn-terminal-session-event.json"
         ))
         .expect("turn terminal session fixture parses");
         assert_eq!(event.event_kind, SessionEventKind::TurnCompleted);
@@ -1075,7 +1079,7 @@ mod tests {
     #[test]
     fn parses_shared_turn_terminal_variant_session_event_fixtures() {
         let interrupted = parse_session_event(include_str!(
-            "../carrier-protocol/fixtures/turn-interrupted-session-event.json"
+            "../../narada/packages/carrier-protocol/fixtures/turn-interrupted-session-event.json"
         ))
         .expect("turn interrupted session fixture parses");
         assert_eq!(interrupted.event_kind, SessionEventKind::TurnInterrupted);
@@ -1092,7 +1096,7 @@ mod tests {
         );
 
         let failed = parse_session_event(include_str!(
-            "../carrier-protocol/fixtures/turn-failed-session-event.json"
+            "../../narada/packages/carrier-protocol/fixtures/turn-failed-session-event.json"
         ))
         .expect("turn failed session fixture parses");
         assert_eq!(failed.event_kind, SessionEventKind::TurnFailed);
@@ -1112,7 +1116,7 @@ mod tests {
     #[test]
     fn parses_shared_provider_payload_session_event_fixtures() {
         let provider_request = parse_session_event(include_str!(
-            "../carrier-protocol/fixtures/provider-request-session-event.json"
+            "../../narada/packages/carrier-protocol/fixtures/provider-request-session-event.json"
         ))
         .expect("provider request session fixture parses");
         assert_eq!(
@@ -1135,12 +1139,12 @@ mod tests {
                 true,
                 "requested_but_not_dispatched",
                 Some("provider_adapter_not_configured".to_string()),
-                "run startup sequence",
+                "inspect the workboard",
             )
         );
 
         let text_delta = parse_session_event(include_str!(
-            "../carrier-protocol/fixtures/provider-text-delta-session-event.json"
+            "../../narada/packages/carrier-protocol/fixtures/provider-text-delta-session-event.json"
         ))
         .expect("provider text delta session fixture parses");
         assert_eq!(
@@ -1158,7 +1162,7 @@ mod tests {
         );
 
         let tool_call = parse_session_event(include_str!(
-            "../carrier-protocol/fixtures/provider-tool-call-session-event.json"
+            "../../narada/packages/carrier-protocol/fixtures/provider-tool-call-session-event.json"
         ))
         .expect("provider tool call session fixture parses");
         assert_eq!(
@@ -1180,7 +1184,7 @@ mod tests {
     #[test]
     fn parses_shared_tool_execution_session_event_fixtures() {
         let tool_call = parse_session_event(include_str!(
-            "../carrier-protocol/fixtures/tool-call-session-event.json"
+            "../../narada/packages/carrier-protocol/fixtures/tool-call-session-event.json"
         ))
         .expect("tool call session fixture parses");
         assert_eq!(tool_call.event_kind, SessionEventKind::ToolCallRequested);
@@ -1188,7 +1192,7 @@ mod tests {
         assert_eq!(tool_call.payload["requesting_agent_id"], "sonar.resident");
 
         let tool_result = parse_session_event(include_str!(
-            "../carrier-protocol/fixtures/tool-result-session-event.json"
+            "../../narada/packages/carrier-protocol/fixtures/tool-result-session-event.json"
         ))
         .expect("tool result session fixture parses");
         assert_eq!(tool_result.event_kind, SessionEventKind::ToolResultReceived);
@@ -1199,14 +1203,14 @@ mod tests {
     #[test]
     fn parses_shared_carrier_internal_session_event_fixtures() {
         let command = parse_session_event(include_str!(
-            "../carrier-protocol/fixtures/carrier-command-session-event.json"
+            "../../narada/packages/carrier-protocol/fixtures/carrier-command-session-event.json"
         ))
         .expect("carrier command session fixture parses");
         assert_eq!(command.event_kind, SessionEventKind::CarrierCommandExecuted);
         assert_eq!(command.payload["command"], "queue_show");
 
         let diagnostic = parse_session_event(include_str!(
-            "../carrier-protocol/fixtures/carrier-diagnostic-session-event.json"
+            "../../narada/packages/carrier-protocol/fixtures/carrier-diagnostic-session-event.json"
         ))
         .expect("carrier diagnostic session fixture parses");
         assert_eq!(
@@ -1220,7 +1224,7 @@ mod tests {
     #[test]
     fn parses_shared_directive_session_event_fixtures() {
         let receipt = parse_session_event(include_str!(
-            "../carrier-protocol/fixtures/directive-receipt-session-event.json"
+            "../../narada/packages/carrier-protocol/fixtures/directive-receipt-session-event.json"
         ))
         .expect("directive receipt session fixture parses");
         assert_eq!(
@@ -1230,7 +1234,7 @@ mod tests {
         assert_eq!(receipt.payload["directive_id"], "dir_fixture_1");
 
         let accepted = parse_session_event(include_str!(
-            "../carrier-protocol/fixtures/directive-carrier-accepted-session-event.json"
+            "../../narada/packages/carrier-protocol/fixtures/directive-carrier-accepted-session-event.json"
         ))
         .expect("directive accepted session fixture parses");
         assert_eq!(
@@ -1243,14 +1247,14 @@ mod tests {
         );
 
         let held = parse_session_event(include_str!(
-            "../carrier-protocol/fixtures/system-directive-held-session-event.json"
+            "../../narada/packages/carrier-protocol/fixtures/system-directive-held-session-event.json"
         ))
         .expect("system directive held session fixture parses");
         assert_eq!(held.event_kind, SessionEventKind::SystemDirectiveHeld);
         assert_eq!(held.payload["held_reason"], "composer_nonempty");
 
         let released = parse_session_event(include_str!(
-            "../carrier-protocol/fixtures/system-directive-released-session-event.json"
+            "../../narada/packages/carrier-protocol/fixtures/system-directive-released-session-event.json"
         ))
         .expect("system directive released session fixture parses");
         assert_eq!(
@@ -1263,7 +1267,7 @@ mod tests {
     #[test]
     fn serializes_shared_session_event_fixture_as_jsonl_line() {
         let event = parse_session_event(include_str!(
-            "../carrier-protocol/fixtures/session-event.json"
+            "../../narada/packages/carrier-protocol/fixtures/session-event.json"
         ))
         .expect("session fixture parses");
         let line = serialize_session_event(&event).expect("session event serializes");
@@ -1275,7 +1279,7 @@ mod tests {
     #[test]
     fn parses_shared_payload_ref_fixture() {
         let payload_ref = parse_payload_ref(include_str!(
-            "../carrier-protocol/fixtures/payload-ref.json"
+            "../../narada/packages/carrier-protocol/fixtures/payload-ref.json"
         ))
         .expect("payload ref fixture parses");
         assert_eq!(payload_ref.reader_tool, "mcp_payload_read");
@@ -1288,7 +1292,7 @@ mod tests {
     #[test]
     fn parses_shared_payload_policy_fixture() {
         let policy = parse_payload_policy(include_str!(
-            "../carrier-protocol/fixtures/payload-policy.json"
+            "../../narada/packages/carrier-protocol/fixtures/payload-policy.json"
         ))
         .expect("payload policy fixture parses");
         assert_eq!(policy.max_inline_chars, 4000);
@@ -1304,7 +1308,7 @@ mod tests {
     #[test]
     fn rejects_non_object_metadata() {
         let mut event = parse_input_event(include_str!(
-            "../carrier-protocol/fixtures/input-event.json"
+            "../../narada/packages/carrier-protocol/fixtures/input-event.json"
         ))
         .expect("input fixture parses");
         event.metadata = json!([]);
@@ -1318,7 +1322,7 @@ mod tests {
     #[test]
     fn enforces_agent_and_external_source_provenance_metadata() {
         let mut agent = parse_input_event(include_str!(
-            "../carrier-protocol/fixtures/input-event.json"
+            "../../narada/packages/carrier-protocol/fixtures/input-event.json"
         ))
         .expect("input fixture parses");
         agent.source_kind = SourceKind::Agent;
@@ -1343,7 +1347,7 @@ mod tests {
     #[test]
     fn enforces_directive_source_and_provenance_rules() {
         let mut event = parse_input_event(include_str!(
-            "../carrier-protocol/fixtures/input-event.json"
+            "../../narada/packages/carrier-protocol/fixtures/input-event.json"
         ))
         .expect("input fixture parses");
         event.directive_id = Some("dir_1".to_string());

@@ -2,7 +2,9 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
-const PROVIDER_ADAPTER_CONTRACT_JSON: &str = include_str!("../contracts/provider-adapters.json");
+const PROVIDER_ADAPTER_CONTRACT_JSON: &str = include_str!(
+    "../../narada/packages/carrier-provider-contract/contracts/provider-adapters.json"
+);
 const EXPECTED_SCHEMA: &str = "narada.agent_tui.provider_adapter_contract.v0";
 const EXPECTED_PROVIDER_EXECUTION_ENV_VAR: &str = "NARADA_AGENT_TUI_ENABLE_PROVIDER_EXECUTION";
 const EXPECTED_PROVIDER_ADAPTER_KIND_ENV_VAR: &str = "NARADA_AGENT_TUI_PROVIDER_ADAPTER_KIND";

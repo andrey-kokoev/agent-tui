@@ -2,6 +2,7 @@ use crate::mcp_fabric_boundary::McpToolResult;
 use crate::mcp_fabric_transport::McpFabricPreparedToolCall;
 use crate::mcp_json_rpc::JsonRpcResponse;
 use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Instant;
 
@@ -66,12 +67,17 @@ pub fn execute_prepared_tool_call_once(
     prepared: &McpFabricPreparedToolCall,
 ) -> Result<McpStdioProcessIoResult, String> {
     let started = Instant::now();
-    let mut child = Command::new(&prepared.command)
+    let mut command = Command::new(&prepared.command);
+    command
         .args(&prepared.args)
         .envs(&prepared.env)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(site_root) = prepared.env.get("NARADA_SITE_ROOT") {
+        command.current_dir(Path::new(site_root));
+    }
+    let mut child = command
         .spawn()
         .map_err(|error| format!("mcp_stdio_spawn_failed:{}:{error}", prepared.server_name))?;
 
@@ -210,6 +216,55 @@ process.stdin.on('data', chunk => {
                 .response_line
                 .contains("env-value-from-prepared-call")
         );
+    }
+
+    #[test]
+    fn spawned_process_uses_site_root_as_working_directory() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock works")
+            .as_nanos();
+        let site_root = std::env::temp_dir().join(format!("narada-agent-tui-mcp-cwd-{unique}"));
+        fs::create_dir_all(&site_root).expect("create temp site root");
+        let script_path =
+            std::env::temp_dir().join(format!("narada-agent-tui-mcp-cwd-{unique}.mjs"));
+        fs::write(
+            &script_path,
+            r#"
+process.stdin.setEncoding('utf8');
+let input = '';
+let done = false;
+process.stdin.on('data', chunk => {
+  if (done) return;
+  input += chunk;
+  const newline = input.indexOf('\n');
+  if (newline === -1) return;
+  done = true;
+  const request = JSON.parse(input.slice(0, newline));
+  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: process.cwd() }] } }) + '\n');
+});
+"#,
+        )
+        .expect("write temp mcp script");
+        let mut env = BTreeMap::new();
+        env.insert(
+            "NARADA_SITE_ROOT".to_string(),
+            site_root.display().to_string(),
+        );
+        let prepared = prepared_with_command("node", vec![script_path.display().to_string()], env);
+
+        let result = execute_prepared_tool_call_once(&prepared).expect("spawned exchange succeeds");
+
+        let response: serde_json::Value =
+            serde_json::from_str(result.response_line.trim()).expect("response is json");
+        let cwd = response["result"]["content"][0]["text"]
+            .as_str()
+            .expect("cwd text is present");
+        let actual_cwd = fs::canonicalize(cwd).expect("cwd canonicalizes");
+        let expected_cwd = fs::canonicalize(&site_root).expect("site root canonicalizes");
+        let _ = fs::remove_file(&script_path);
+        let _ = fs::remove_dir(&site_root);
+        assert_eq!(actual_cwd, expected_cwd);
     }
 
     #[test]

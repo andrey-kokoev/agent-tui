@@ -14,7 +14,8 @@ use std::fs::{read_to_string, remove_file};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-const INPUT_FIXTURE: &str = include_str!("../carrier-protocol/fixtures/input-event.json");
+const INPUT_FIXTURE: &str =
+    include_str!("../../narada/packages/carrier-protocol/fixtures/input-event.json");
 static TEMP_PATH_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn admitted_provider() -> String {

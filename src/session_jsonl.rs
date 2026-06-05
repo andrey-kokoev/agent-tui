@@ -27,7 +27,7 @@ mod tests {
     #[test]
     fn encodes_session_event_as_single_jsonl_line() {
         let event = parse_session_event(include_str!(
-            "../carrier-protocol/fixtures/session-event.json"
+            "../../narada/packages/carrier-protocol/fixtures/session-event.json"
         ))
         .expect("session fixture parses");
 

@@ -96,6 +96,55 @@ mod tests {
 
     #[test]
     fn parses_agent_cli_parity_commands() {
+        let command_contract: serde_json::Value = serde_json::from_str(include_str!(
+            "../../narada/packages/carrier-command-contract/contracts/commands.json"
+        ))
+        .expect("shared command contract parses");
+        assert_eq!(
+            command_contract
+                .get("schema")
+                .and_then(serde_json::Value::as_str),
+            Some("narada.carrier.command_contract.v1")
+        );
+        let command_tokens: Vec<&str> = command_contract
+            .get("commands")
+            .and_then(serde_json::Value::as_array)
+            .expect("commands are listed")
+            .iter()
+            .flat_map(|command| {
+                let primary = command
+                    .get("primary")
+                    .and_then(serde_json::Value::as_str)
+                    .into_iter();
+                let aliases = command
+                    .get("aliases")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str);
+                primary.chain(aliases)
+            })
+            .collect();
+        assert_eq!(
+            command_tokens,
+            vec![
+                "/help",
+                "/status",
+                "/stats",
+                "/model",
+                "/thinking",
+                "/tool-output",
+                "/tool-outputs",
+                "/queue",
+                "/queue clear",
+                "/queue drop <index>",
+                "/clear",
+                "/exit",
+                "/quit",
+                "exit",
+            ]
+        );
+
         assert_eq!(
             parse_operator_submit("/help"),
             OperatorSubmit::CarrierCommand(CarrierCommand::Help)
