@@ -92,6 +92,7 @@ fn mcp_fabric_boundary_acceptance_records_tool_request_and_result_evidence() {
                 status: "ok".to_string(),
                 duration_ms: 42,
                 result_summary: "loop pass complete".to_string(),
+                result_text: None,
                 result_ref: None,
             },
             &context(),

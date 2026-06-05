@@ -347,6 +347,14 @@ fn queue_command_feedback_item(
         RuntimeOperatorSubmitResult::ThinkingRejected { value: _ } => {
             "Usage: /thinking none|low|medium|high".to_string()
         }
+        RuntimeOperatorSubmitResult::ToolOutputShown { shown }
+        | RuntimeOperatorSubmitResult::ToolOutputChanged { shown } => format!(
+            "Tool call outputs are {} in the displayed transcript.",
+            if *shown { "shown" } else { "hidden" }
+        ),
+        RuntimeOperatorSubmitResult::ToolOutputRejected { value: _ } => {
+            "Usage: /tool-output [on|off|toggle|status]".to_string()
+        }
         RuntimeOperatorSubmitResult::ClearDisplay => "cleared".to_string(),
         RuntimeOperatorSubmitResult::Exit => "exiting".to_string(),
         RuntimeOperatorSubmitResult::UnknownCommand { command } => {
@@ -389,6 +397,7 @@ fn help_text() -> String {
         "/stats [args]         Show local Codex transcript statistics",
         "/model <name>         Set model for later turns",
         "/thinking <level>     none, low, medium, high",
+        "/tool-output [state]  Toggle displayed tool call outputs (on, off, toggle)",
         "/queue                Show queued carrier input",
         "/queue clear          Clear queued operator steering",
         "/queue drop <index>   Drop one queued operator steering item",
@@ -1290,10 +1299,10 @@ mod tests {
             terminal
                 .status_lines
                 .iter()
-                .any(|line| { line.contains("thinking") && line.contains("provider working") })
+                .all(|line| { !line.contains("thinking") && !line.contains("provider working") })
         );
         assert!(terminal.status_lines.iter().any(|line| {
-            line.contains("queued operator steering 1") && line.contains("provider working")
+            line.contains("queued operator steering 1") && !line.contains("provider working")
         }));
         assert!(
             !terminal

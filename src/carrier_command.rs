@@ -5,6 +5,7 @@ pub enum CarrierCommand {
     Stats { value: Option<String> },
     Model { value: Option<String> },
     Thinking { value: Option<String> },
+    ToolOutput { value: Option<String> },
     Clear,
     Exit,
     QueueShow,
@@ -50,6 +51,11 @@ pub fn parse_operator_submit(text: &str) -> OperatorSubmit {
         "/thinking" => OperatorSubmit::CarrierCommand(CarrierCommand::Thinking {
             value: nonempty_value(value),
         }),
+        "/tool-output" | "/tool-outputs" => {
+            OperatorSubmit::CarrierCommand(CarrierCommand::ToolOutput {
+                value: nonempty_value(value),
+            })
+        }
         "/clear" => OperatorSubmit::CarrierCommand(CarrierCommand::Clear),
         "/exit" | "/quit" => OperatorSubmit::CarrierCommand(CarrierCommand::Exit),
         "/queue" => parse_queue_command(&value),
@@ -115,6 +121,16 @@ mod tests {
             OperatorSubmit::CarrierCommand(CarrierCommand::Thinking {
                 value: Some("high".to_string())
             })
+        );
+        assert_eq!(
+            parse_operator_submit("/tool-output off"),
+            OperatorSubmit::CarrierCommand(CarrierCommand::ToolOutput {
+                value: Some("off".to_string())
+            })
+        );
+        assert_eq!(
+            parse_operator_submit("/tool-outputs"),
+            OperatorSubmit::CarrierCommand(CarrierCommand::ToolOutput { value: None })
         );
         assert_eq!(
             parse_operator_submit("/clear"),

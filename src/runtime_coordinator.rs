@@ -59,6 +59,15 @@ pub enum RuntimeOperatorSubmitResult {
     ThinkingRejected {
         value: String,
     },
+    ToolOutputShown {
+        shown: bool,
+    },
+    ToolOutputChanged {
+        shown: bool,
+    },
+    ToolOutputRejected {
+        value: String,
+    },
     ClearDisplay,
     Exit,
     UnknownCommand {
@@ -85,6 +94,7 @@ pub struct RuntimeCoordinator {
     next_evidence_index: u64,
     session_model: Option<String>,
     session_thinking: Option<String>,
+    display_tool_outputs: bool,
 }
 
 fn run_codex_transcript_stats(value: Option<&str>) -> String {
@@ -178,7 +188,12 @@ impl RuntimeCoordinator {
             session_thinking: std::env::var("NARADA_AI_THINKING")
                 .ok()
                 .filter(|value| !value.trim().is_empty()),
+            display_tool_outputs: true,
         }
+    }
+
+    pub fn display_tool_outputs(&self) -> bool {
+        self.display_tool_outputs
     }
 
     pub fn queue(&self) -> &InputQueue {
@@ -334,6 +349,49 @@ impl RuntimeCoordinator {
                     })
                 }
             },
+            CarrierCommand::ToolOutput { value } => {
+                let normalized = value.as_deref().map(str::to_ascii_lowercase);
+                match normalized.as_deref() {
+                    Some("on" | "show" | "shown") => {
+                        self.display_tool_outputs = true;
+                        self.write_carrier_command_evidence(
+                            "/tool-output",
+                            clock,
+                            json!({ "value": "shown" }),
+                        )?;
+                        Ok(RuntimeOperatorSubmitResult::ToolOutputChanged { shown: true })
+                    }
+                    Some("off" | "hide" | "hidden") => {
+                        self.display_tool_outputs = false;
+                        self.write_carrier_command_evidence(
+                            "/tool-output",
+                            clock,
+                            json!({ "value": "hidden" }),
+                        )?;
+                        Ok(RuntimeOperatorSubmitResult::ToolOutputChanged { shown: false })
+                    }
+                    Some("toggle") | None => {
+                        self.display_tool_outputs = !self.display_tool_outputs;
+                        self.write_carrier_command_evidence(
+                        "/tool-output",
+                        clock,
+                        json!({ "value": if self.display_tool_outputs { "shown" } else { "hidden" } }),
+                    )?;
+                        Ok(RuntimeOperatorSubmitResult::ToolOutputChanged {
+                            shown: self.display_tool_outputs,
+                        })
+                    }
+                    Some("status") => {
+                        self.write_carrier_command_evidence("/tool-output", clock, json!({}))?;
+                        Ok(RuntimeOperatorSubmitResult::ToolOutputShown {
+                            shown: self.display_tool_outputs,
+                        })
+                    }
+                    Some(value) => Ok(RuntimeOperatorSubmitResult::ToolOutputRejected {
+                        value: value.to_string(),
+                    }),
+                }
+            }
             CarrierCommand::Clear => {
                 self.write_carrier_command_evidence("/clear", clock, json!({}))?;
                 Ok(RuntimeOperatorSubmitResult::ClearDisplay)
@@ -571,6 +629,46 @@ mod tests {
             occurred_at: "2026-05-30T00:00:02.000Z".to_string(),
             event_id_prefix: "session_event_runtime".to_string(),
         }
+    }
+
+    #[test]
+    fn carrier_tool_output_toggles_display_state_and_records_evidence() {
+        let control_path = temp_path("control");
+        let session_path = temp_path("session");
+        let mut coordinator = RuntimeCoordinator::new(&control_path, &session_path, context());
+
+        let result = coordinator
+            .handle_operator_submit("/tool-output off", &clock())
+            .expect("tool output command handled");
+        assert_eq!(
+            result,
+            RuntimeOperatorSubmitResult::ToolOutputChanged { shown: false }
+        );
+        assert_eq!(coordinator.display_tool_outputs(), false);
+
+        let status = coordinator
+            .handle_operator_submit("/tool-output status", &clock())
+            .expect("tool output status handled");
+        assert_eq!(
+            status,
+            RuntimeOperatorSubmitResult::ToolOutputShown { shown: false }
+        );
+
+        let session_jsonl = read_to_string(&session_path).expect("session jsonl exists");
+        let events = session_jsonl
+            .lines()
+            .map(|line| parse_session_event(line).expect("event parses"))
+            .collect::<Vec<_>>();
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[0].event_kind,
+            SessionEventKind::CarrierCommandExecuted
+        );
+        assert_eq!(events[0].payload["command"], "/tool-output");
+        assert_eq!(events[0].payload["details"]["value"], "hidden");
+
+        remove_file(control_path).ok();
+        remove_file(session_path).ok();
     }
 
     #[test]

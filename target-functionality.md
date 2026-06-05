@@ -210,9 +210,9 @@ The status line is ephemeral and must use operational language.
 
 Examples:
 
-- `thinking 1m 12s | draft 34 chars | queued operator steering 2 | Esc interrupt`
-- `calling site_loop_run_once 8s | held system directives 1 | oldest 22s`
-- `interrupt requested | waiting for provider`
+- `queued operator steering 2 | held system directives 1 | oldest 22s`
+- `session carrier_1 | transcript 8`
+- `error provider cancelled`
 
 The status line must distinguish:
 

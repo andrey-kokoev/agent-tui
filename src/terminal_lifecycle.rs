@@ -419,7 +419,6 @@ mod tests {
         assert!(text.contains("operator note -> sonar.resident>"));
         assert!(!text.contains("Composer:"));
         assert!(text.contains("live steering note"));
-        assert!(text.contains("thinking"));
         assert!(!text.contains("stale snapshot"));
     }
 

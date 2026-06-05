@@ -1,4 +1,4 @@
-use crate::app_view_model::{AppViewInput, AppViewModel, build_app_view};
+use crate::app_view_model::{AppViewInput, AppViewModel, build_app_view_with_transcript_options};
 use crate::composer_draft::ComposerDraftState;
 use crate::composer_view_model::ComposerViewInput;
 use crate::input_queue::{SessionEvidenceContext, TurnState, elapsed_label_between};
@@ -14,6 +14,7 @@ use crate::status_view_model::{ProviderRuntimeState, RuntimePostureState, Status
 use crate::terminal_runtime_config::TerminalRuntimeConfig;
 use crate::transcript_projection::{TranscriptItem, TranscriptItemKind};
 use crate::transcript_store::{TranscriptIngestSummary, TranscriptStore};
+use crate::transcript_view_model::TranscriptDisplayOptions;
 use crate::turn_coordinator::{
     NoopProviderToolCallExecutor, ProviderToolCallExecutor, TurnCoordinator, TurnCoordinatorClock,
 };
@@ -319,40 +320,45 @@ impl AgentTuiInteractiveRuntime {
         if self.coordinator.queue().turn_state() == crate::input_queue::TurnState::Active {
             runtime_posture.provider_state = ProviderRuntimeState::Working;
         }
-        build_app_view(&AppViewInput {
-            terminal_size,
-            layout_config: LayoutConfig::default(),
-            transcript_items: self.transcript.items().to_vec(),
-            status: StatusViewInput {
-                identity: self.identity.clone(),
-                session: self.session.clone(),
-                turn_state: self.coordinator.queue().turn_state(),
-                active_phase: now.and_then(|now| {
-                    active_tool_call_phase(self.transcript.items(), now).or_else(|| {
-                        active_provider_phase(
-                            self.coordinator.queue().turn_state(),
-                            self.coordinator.queue().active_turn_age_label(now),
-                        )
-                    })
-                }),
-                active_turn_age: now
-                    .and_then(|now| self.coordinator.queue().active_turn_age_label(now)),
-                queued_inputs: self.coordinator.queue().queued_count(),
-                held_system_directives: self.coordinator.queue().held_count(),
-                oldest_held_age: now
-                    .and_then(|now| self.coordinator.queue().oldest_held_age_label(now)),
-                transcript_items: self.transcript.len(),
-                runtime_posture,
-                last_error,
+        build_app_view_with_transcript_options(
+            &AppViewInput {
+                terminal_size,
+                layout_config: LayoutConfig::default(),
+                transcript_items: self.transcript.items().to_vec(),
+                status: StatusViewInput {
+                    identity: self.identity.clone(),
+                    session: self.session.clone(),
+                    turn_state: self.coordinator.queue().turn_state(),
+                    active_phase: now.and_then(|now| {
+                        active_tool_call_phase(self.transcript.items(), now).or_else(|| {
+                            active_provider_phase(
+                                self.coordinator.queue().turn_state(),
+                                self.coordinator.queue().active_turn_age_label(now),
+                            )
+                        })
+                    }),
+                    active_turn_age: now
+                        .and_then(|now| self.coordinator.queue().active_turn_age_label(now)),
+                    queued_inputs: self.coordinator.queue().queued_count(),
+                    held_system_directives: self.coordinator.queue().held_count(),
+                    oldest_held_age: now
+                        .and_then(|now| self.coordinator.queue().oldest_held_age_label(now)),
+                    transcript_items: self.transcript.len(),
+                    runtime_posture,
+                    last_error,
+                },
+                composer: ComposerViewInput {
+                    identity: self.identity.clone(),
+                    draft_text: draft.text.clone(),
+                    turn_state: self.coordinator.queue().turn_state(),
+                    queued_operator_notes: self.coordinator.queue().queued_count(),
+                    held_system_directives: self.coordinator.queue().held_count(),
+                },
             },
-            composer: ComposerViewInput {
-                identity: self.identity.clone(),
-                draft_text: draft.text.clone(),
-                turn_state: self.coordinator.queue().turn_state(),
-                queued_operator_notes: self.coordinator.queue().queued_count(),
-                held_system_directives: self.coordinator.queue().held_count(),
+            TranscriptDisplayOptions {
+                show_tool_outputs: self.coordinator.display_tool_outputs(),
             },
-        })
+        )
     }
 }
 
@@ -796,9 +802,16 @@ mod tests {
             None,
         );
 
-        assert!(model.status.compact_line.contains("provider configured"));
-        assert!(model.status.compact_line.contains("mcp configured"));
-        assert!(model.status.compact_line.contains("terminal configured"));
+        assert!(!model.status.compact_line.contains("provider configured"));
+        assert!(!model.status.compact_line.contains("mcp configured"));
+        assert!(!model.status.compact_line.contains("terminal configured"));
+        assert!(
+            model
+                .status
+                .segments
+                .iter()
+                .any(|segment| segment.key == "provider_state" && segment.value == "configured")
+        );
 
         remove_file(control_path).ok();
         remove_file(session_path).ok();

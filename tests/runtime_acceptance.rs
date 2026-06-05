@@ -8,8 +8,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-const CONTROL_FIXTURE: &str =
-    include_str!("../../carrier-protocol/fixtures/control-input-event.json");
+const CONTROL_FIXTURE: &str = include_str!("../carrier-protocol/fixtures/control-input-event.json");
 static TEMP_PATH_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn temp_path(name: &str) -> PathBuf {

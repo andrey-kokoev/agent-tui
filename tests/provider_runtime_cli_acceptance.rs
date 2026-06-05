@@ -4,8 +4,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-const CONTROL_FIXTURE: &str =
-    include_str!("../../carrier-protocol/fixtures/control-input-event.json");
+const CONTROL_FIXTURE: &str = include_str!("../carrier-protocol/fixtures/control-input-event.json");
 static TEMP_PATH_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn admitted_provider() -> &'static str {
@@ -67,6 +66,13 @@ fn temp_path(name: &str) -> PathBuf {
         "narada-agent-tui-provider-runtime-{name}-{}-{unique}.jsonl",
         std::process::id()
     ))
+}
+
+fn provider_prompt_control_fixture() -> String {
+    CONTROL_FIXTURE.replace(
+        "\"content\":\"run startup sequence\"",
+        "\"content\":\"summarize provider runtime state\"",
+    )
 }
 
 #[test]
@@ -241,7 +247,11 @@ fn provider_runtime_cli_acceptance_records_runtime_posture_in_runtime_step_evide
 fn provider_runtime_cli_acceptance_records_production_adapter_admission_in_runtime_step_evidence() {
     let control_path = temp_path("control");
     let session_path = temp_path("session");
-    write(&control_path, format!("{CONTROL_FIXTURE}\n")).expect("control fixture writes");
+    write(
+        &control_path,
+        format!("{}\n", provider_prompt_control_fixture()),
+    )
+    .expect("control fixture writes");
 
     let mut command = base_command();
     let contract = provider_adapter_contract();

@@ -5,7 +5,10 @@ use crate::status_view_model::{
     status_segment_compact_text, status_segment_is_visible,
 };
 use crate::transcript_projection::TranscriptItem;
-use crate::transcript_view_model::{TranscriptRow, build_transcript_rows};
+use crate::transcript_view_model::{
+    TranscriptDisplayOptions, TranscriptRow, build_transcript_rows,
+    build_transcript_rows_with_options,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppViewInput {
@@ -42,6 +45,22 @@ impl AppViewModel {
 
 pub fn build_app_view(input: &AppViewInput) -> AppViewModel {
     let transcript_rows = build_transcript_rows(&input.transcript_items);
+    build_app_view_from_rows(input, transcript_rows)
+}
+
+pub fn build_app_view_with_transcript_options(
+    input: &AppViewInput,
+    transcript_options: TranscriptDisplayOptions,
+) -> AppViewModel {
+    let transcript_rows =
+        build_transcript_rows_with_options(&input.transcript_items, transcript_options);
+    build_app_view_from_rows(input, transcript_rows)
+}
+
+fn build_app_view_from_rows(
+    input: &AppViewInput,
+    transcript_rows: Vec<TranscriptRow>,
+) -> AppViewModel {
     let mut status = build_status_view(&input.status);
     set_status_segment_value(
         &mut status.segments,
@@ -138,7 +157,7 @@ mod tests {
         assert_eq!(model.transcript_rows[0].actor_label, "operator");
         assert_eq!(
             model.status.compact_line,
-            "session carrier_1 | idle | transcript 1 | provider disabled | provider adapter disabled | mcp disabled | terminal disabled"
+            "session carrier_1 | transcript 1"
         );
         assert_eq!(model.composer.prompt_label, "operator -> sonar.resident>");
     }
@@ -274,21 +293,16 @@ mod tests {
             ..input()
         });
 
-        assert!(model.status.compact_line.contains("provider configured"));
-        assert!(
-            model
-                .status
-                .compact_line
-                .contains("provider adapter configured without adapter")
-        );
-        assert!(model.status.compact_line.contains("mcp configured"));
-        assert!(model.status.compact_line.contains("terminal configured"));
         assert!(
             model
                 .status
                 .compact_line
                 .ends_with("error provider cancelled")
         );
+        assert!(!model.status.compact_line.contains("provider configured"));
+        assert!(!model.status.compact_line.contains("provider adapter"));
+        assert!(!model.status.compact_line.contains("mcp configured"));
+        assert!(!model.status.compact_line.contains("terminal configured"));
         assert!(
             !model
                 .status
@@ -355,11 +369,13 @@ mod tests {
         });
 
         assert_eq!(model.status.segments[2].value, "active 1m 12s");
-        assert!(model.status.compact_line.contains("thinking 1m 12s"));
+        assert!(!model.status.compact_line.contains("thinking 1m 12s"));
         assert_eq!(model.status.segments[3].value, "2");
         assert_eq!(model.status.segments[5].key, "esc_action");
         assert_eq!(model.status.segments[5].value, "interrupt");
         assert_eq!(model.status.segments[7].value, "working");
+        assert!(!model.status.compact_line.contains("Esc interrupt"));
+        assert!(!model.status.compact_line.contains("provider working"));
         assert_eq!(
             model.composer.prompt_label,
             "operator note -> sonar.resident>"

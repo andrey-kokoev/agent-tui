@@ -210,6 +210,6 @@ fn terminal_runtime_cli_acceptance_renders_polished_transcript_frame_from_sessio
     assert!(rendered.contains("agent-tui:"));
     assert!(rendered.contains("completed"));
     assert!(rendered.contains("2026-05-30Z18:29"));
-    assert!(rendered.contains("terminal configured"));
+    assert!(!rendered.contains("terminal configured"));
     assert!(rendered.contains("operator -> sonar.resident>"));
 }

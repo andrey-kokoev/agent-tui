@@ -11,10 +11,30 @@ pub struct TranscriptRow {
     pub occurred_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TranscriptDisplayOptions {
+    pub show_tool_outputs: bool,
+}
+
+impl Default for TranscriptDisplayOptions {
+    fn default() -> Self {
+        Self {
+            show_tool_outputs: true,
+        }
+    }
+}
+
 pub fn build_transcript_rows(items: &[TranscriptItem]) -> Vec<TranscriptRow> {
+    build_transcript_rows_with_options(items, TranscriptDisplayOptions::default())
+}
+
+pub fn build_transcript_rows_with_options(
+    items: &[TranscriptItem],
+    options: TranscriptDisplayOptions,
+) -> Vec<TranscriptRow> {
     let mut rows: Vec<TranscriptRow> = Vec::new();
     for (index, item) in items.iter().enumerate() {
-        if !is_visible_transcript_item(item) {
+        if !is_visible_transcript_item(item, options) {
             continue;
         }
         if let Some(last) = rows.last_mut() {
@@ -32,8 +52,14 @@ pub fn build_transcript_rows(items: &[TranscriptItem]) -> Vec<TranscriptRow> {
     rows
 }
 
-fn is_visible_transcript_item(item: &TranscriptItem) -> bool {
-    !(item.kind == TranscriptItemKind::ProviderTextDelta && item.text.trim().is_empty())
+fn is_visible_transcript_item(item: &TranscriptItem, options: TranscriptDisplayOptions) -> bool {
+    if item.kind == TranscriptItemKind::ProviderTextDelta && item.text.trim().is_empty() {
+        return false;
+    }
+    if !options.show_tool_outputs && item.kind == TranscriptItemKind::ToolResultReceived {
+        return false;
+    }
+    true
 }
 
 fn can_coalesce_provider_text(row: &TranscriptRow, item: &TranscriptItem) -> bool {
@@ -191,6 +217,42 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].text, "Hello world.");
         assert_eq!(rows[0].key, "row_0_turn_1_provider_text_delta_1");
+    }
+
+    #[test]
+    fn hides_tool_result_rows_when_tool_outputs_are_disabled() {
+        let rows = build_transcript_rows_with_options(
+            &[
+                item(
+                    TranscriptItemKind::ProviderToolCallRequest,
+                    TranscriptActor::AgentTui,
+                    "turn_1",
+                    "fs_read_file({})",
+                    Some(1),
+                ),
+                item(
+                    TranscriptItemKind::ToolResultReceived,
+                    TranscriptActor::AgentTui,
+                    "turn_1",
+                    "ok fs_read_file in 8ms",
+                    None,
+                ),
+                item(
+                    TranscriptItemKind::ProviderTextDelta,
+                    TranscriptActor::Agent,
+                    "turn_1",
+                    "Done.",
+                    Some(2),
+                ),
+            ],
+            TranscriptDisplayOptions {
+                show_tool_outputs: false,
+            },
+        );
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].kind, TranscriptItemKind::ProviderToolCallRequest);
+        assert_eq!(rows[1].kind, TranscriptItemKind::ProviderTextDelta);
     }
 
     #[test]

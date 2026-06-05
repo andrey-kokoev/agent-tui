@@ -108,7 +108,7 @@ fn transcript_paragraph(model: &AppViewModel) -> Paragraph<'static> {
     let inner_height = model.layout.transcript.height.saturating_sub(2).max(1) as usize;
     let agent_identity = transcript_agent_identity(model);
     let lines = visible_transcript_blocks(
-        transcript_blocks(&model.transcript_rows, &agent_identity, inner_width),
+        transcript_blocks_with_active_marker(model, &agent_identity, inner_width),
         inner_height,
         model.transcript_scroll_offset,
     );
@@ -247,6 +247,55 @@ fn transcript_blocks(
         .collect()
 }
 
+fn transcript_blocks_with_active_marker(
+    model: &AppViewModel,
+    agent_identity: &str,
+    width: usize,
+) -> Vec<Vec<Line<'static>>> {
+    let mut blocks = transcript_blocks(&model.transcript_rows, agent_identity, width);
+    if let Some(marker) = active_thinking_marker_block(model, agent_identity, width) {
+        blocks.push(marker);
+    }
+    blocks
+}
+
+fn active_thinking_marker_block(
+    model: &AppViewModel,
+    agent_identity: &str,
+    width: usize,
+) -> Option<Vec<Line<'static>>> {
+    if model
+        .transcript_rows
+        .last()
+        .is_some_and(|row| row.kind == TranscriptItemKind::ProviderTextDelta)
+    {
+        return None;
+    }
+    let value = model
+        .status
+        .segments
+        .iter()
+        .find(|segment| segment.key == "turn_state")
+        .map(|segment| turn_state_display_value(&segment.value))?;
+    let marker = thinking_marker_text(&value)?;
+    let mut spans = vec![Span::styled(
+        agent_identity.to_string(),
+        agent_label_style(),
+    )];
+    spans.push(Span::styled(": ".to_string(), muted_style()));
+    spans.push(Span::styled(marker, muted_style()));
+    Some(vec![Line::from(truncate_spans_to_width(spans, width))])
+}
+
+fn thinking_marker_text(value: &str) -> Option<String> {
+    if value == "thinking" {
+        return Some("Thinking".to_string());
+    }
+    value
+        .strip_prefix("thinking ")
+        .map(|detail| format!("Thinking {detail}"))
+}
+
 fn transcript_block(row: &TranscriptRow, agent_identity: &str, width: usize) -> Vec<Line<'static>> {
     if is_tool_transcript_row(row) {
         return tool_transcript_block(row, agent_identity, width);
@@ -341,8 +390,10 @@ fn tool_transcript_block(
         return narrow_tool_transcript_block(row, agent_identity, width);
     }
 
-    let body_width = width.saturating_sub(label_width).max(1);
-    let mut wrapped = wrap_text(&row.text, body_width);
+    let continuation_indent = TOOL_CONTINUATION_INDENT.min(width.saturating_sub(1));
+    let first_body_width = width.saturating_sub(label_width).max(1);
+    let continuation_width = width.saturating_sub(continuation_indent).max(1);
+    let mut wrapped = wrap_tool_text(&row.text, first_body_width, continuation_width);
     let first = wrapped.first().cloned().unwrap_or_default();
     let mut first_line_spans = transcript_label_spans(row, agent_identity);
     first_line_spans.push(Span::styled(": ", muted_style()));
@@ -352,14 +403,15 @@ fn tool_transcript_block(
         lines.push(Line::from(tool_continuation_line_spans(
             row,
             &continuation,
-            label_width,
+            continuation_indent,
         )));
     }
-    append_tool_timestamp(&mut lines, row, label_width, width);
+    append_tool_timestamp(&mut lines, row, continuation_indent, width);
     lines
 }
 
 const MIN_INLINE_TOOL_PAYLOAD_WIDTH: usize = 8;
+const TOOL_CONTINUATION_INDENT: usize = 2;
 
 fn narrow_tool_transcript_block(
     row: &TranscriptRow,
@@ -1810,6 +1862,46 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
+fn wrap_tool_text(text: &str, first_width: usize, continuation_width: usize) -> Vec<String> {
+    let first_width = first_width.max(1);
+    let continuation_width = continuation_width.max(1);
+    let mut lines = Vec::new();
+    for source_line in display_source_lines(text) {
+        if lines.is_empty() {
+            lines.extend(wrap_source_line_with_first_width(
+                &source_line,
+                first_width,
+                continuation_width,
+            ));
+        } else {
+            lines.extend(wrap_source_line(&source_line, continuation_width));
+        }
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+fn wrap_source_line_with_first_width(
+    source_line: &str,
+    first_width: usize,
+    continuation_width: usize,
+) -> Vec<String> {
+    if source_line.is_empty() || source_line.chars().count() <= first_width {
+        return wrap_source_line(source_line, first_width);
+    }
+
+    let split_at = preferred_split_byte_index(source_line, first_width);
+    let (head, tail) = source_line.split_at(split_at);
+    let mut lines = vec![head.trim_end_matches(' ').to_string()];
+    lines.extend(wrap_source_line(
+        tail.trim_start_matches(' '),
+        continuation_width,
+    ));
+    lines
+}
+
 fn display_source_lines(text: &str) -> Vec<String> {
     let mut lines: Vec<String> = text.lines().map(sanitize_display_source_line).collect();
     while lines.first().is_some_and(|line| line.trim().is_empty()) {
@@ -2587,6 +2679,37 @@ mod tests {
         })
     }
 
+    fn active_thinking_model(transcript_items: Vec<TranscriptItem>) -> AppViewModel {
+        build_app_view(&AppViewInput {
+            terminal_size: TerminalSize {
+                width: 80,
+                height: 12,
+            },
+            layout_config: LayoutConfig::default(),
+            transcript_items,
+            status: StatusViewInput {
+                identity: "sonar.resident".to_string(),
+                session: "carrier_1".to_string(),
+                turn_state: TurnState::Active,
+                active_phase: Some("thinking 8s".to_string()),
+                active_turn_age: Some("8s".to_string()),
+                queued_inputs: 0,
+                held_system_directives: 0,
+                oldest_held_age: None,
+                transcript_items: 1,
+                runtime_posture: RuntimePostureState::disabled(),
+                last_error: None,
+            },
+            composer: ComposerViewInput {
+                identity: "sonar.resident".to_string(),
+                draft_text: String::new(),
+                turn_state: TurnState::Active,
+                queued_operator_notes: 0,
+                held_system_directives: 0,
+            },
+        })
+    }
+
     fn buffer_text(buffer: &Buffer) -> String {
         let area = buffer.area;
         let mut output = String::new();
@@ -2832,6 +2955,45 @@ mod tests {
         assert_eq!(buffer[(timestamp_x, timestamp_y)].fg, Color::DarkGray);
         assert_eq!(buffer[(timestamp_x + 10, timestamp_y)].fg, Color::DarkGray);
         assert_eq!(buffer[(body_x, body_y)].fg, Color::White);
+    }
+
+    #[test]
+    fn active_turn_renders_thinking_marker_inline_in_transcript() {
+        let model = active_thinking_model(vec![TranscriptItem {
+            kind: TranscriptItemKind::InputAdmitted,
+            actor: TranscriptActor::Operator,
+            turn_id: "turn_1".to_string(),
+            text: "run startup sequence".to_string(),
+            sequence: None,
+            projection_key: None,
+            occurred_at: Some("2026-05-30T00:00:00.000Z".to_string()),
+        }]);
+        let mut buffer = Buffer::empty(TuiRect::new(0, 0, 80, 12));
+
+        render_app_to_buffer(&model, &mut buffer);
+
+        assert!(buffer_text(&buffer).contains("sonar.resident: Thinking 8s"));
+    }
+
+    #[test]
+    fn active_turn_omits_thinking_marker_after_agent_text_is_visible() {
+        let model = active_thinking_model(vec![TranscriptItem {
+            kind: TranscriptItemKind::ProviderTextDelta,
+            actor: TranscriptActor::Agent,
+            turn_id: "turn_1".to_string(),
+            text: "Already responding.".to_string(),
+            sequence: Some(1),
+            projection_key: None,
+            occurred_at: Some("2026-05-30T00:00:00.000Z".to_string()),
+        }]);
+        let mut buffer = Buffer::empty(TuiRect::new(0, 0, 80, 12));
+
+        render_app_to_buffer(&model, &mut buffer);
+        let text = buffer_text(&buffer);
+
+        assert!(text.contains("sonar.resident:"));
+        assert!(text.contains("Already responding."));
+        assert!(!text.contains("Thinking 8s"));
     }
 
     #[test]
@@ -3245,6 +3407,8 @@ mod tests {
 
         let (continuation_x, continuation_y) = find_text_position(&buffer, "checkpoint_summary")
             .expect("wrapped tool continuation payload is rendered");
+
+        assert_eq!(buffer[(3, continuation_y)].symbol(), "h");
         assert_eq!(buffer[(continuation_x, continuation_y)].fg, Color::Gray);
     }
 
@@ -3482,9 +3646,9 @@ mod tests {
     fn status_spans_render_muted_fill_when_too_narrow_for_any_segment() {
         let spans = status_spans(
             &[StatusSegment {
-                key: "turn_state".to_string(),
-                label: "turn".to_string(),
-                value: "thinking 12s".to_string(),
+                key: "session".to_string(),
+                label: "session".to_string(),
+                value: "carrier_1".to_string(),
             }],
             2,
         );
@@ -3532,15 +3696,12 @@ mod tests {
         render_app_to_buffer(&model, &mut buffer);
         let text = buffer_text(&buffer);
 
-        assert!(text.contains("calling site_loop_run_once 8s"));
+        assert!(!text.contains("calling site_loop_run_once 8s"));
         assert!(text.contains("queued operator steering 2"));
         assert!(text.contains("held system directives 1"));
         assert!(text.contains("oldest 22s"));
-        assert!(text.contains("Esc interrupt"));
-        let (phase_x, phase_y) = find_text_position(&buffer, "calling site_loop_run_once 8s")
-            .expect("phase appears in status");
-        let phase_tool_x = phase_x + "calling ".chars().count() as u16;
-        let phase_duration_x = phase_x + "calling site_loop_run_once ".chars().count() as u16;
+        assert!(!text.contains("Esc interrupt"));
+        assert!(!text.contains("provider working"));
         let (queued_label_x, queued_y) = find_text_position(&buffer, "queued operator steering")
             .expect("queued operator steering label appears in status");
         let queued_operator_x = queued_label_x + "queued ".chars().count() as u16;
@@ -3551,18 +3712,12 @@ mod tests {
         let held_system_x = held_x + "held ".chars().count() as u16;
         let held_directive_x = held_x + "held system ".chars().count() as u16;
         let held_count_x = held_x + "held system directives ".chars().count() as u16;
-        let (separator_x, separator_y) = find_text_position(&buffer, " | queued operator steering")
-            .expect("separator appears before queued segment");
+        let (separator_x, separator_y) = find_text_position(&buffer, " | held system directives")
+            .expect("separator appears before held segment");
         let (oldest_label_x, oldest_y) =
             find_text_position(&buffer, "oldest 22s").expect("oldest held age appears in status");
         let oldest_value_x = oldest_label_x + "oldest ".chars().count() as u16;
-        let (esc_label_x, esc_y) =
-            find_text_position(&buffer, "Esc interrupt").expect("Esc affordance appears in status");
-        let esc_value_x = esc_label_x + "Esc ".chars().count() as u16;
 
-        assert_eq!(buffer[(phase_x, phase_y)].fg, Color::Green);
-        assert_eq!(buffer[(phase_tool_x, phase_y)].fg, Color::Gray);
-        assert_eq!(buffer[(phase_duration_x, phase_y)].fg, Color::Gray);
         assert_eq!(buffer[(queued_label_x, queued_y)].fg, Color::Green);
         assert_eq!(buffer[(queued_operator_x, queued_y)].fg, Color::Green);
         assert!(
@@ -3588,8 +3743,6 @@ mod tests {
         assert_eq!(buffer[(oldest_label_x, oldest_y)].fg, Color::Yellow);
         assert_eq!(buffer[(oldest_value_x, oldest_y)].fg, Color::Gray);
         assert_eq!(buffer[(separator_x, separator_y)].fg, Color::DarkGray);
-        assert_eq!(buffer[(esc_label_x, esc_y)].fg, Color::Yellow);
-        assert_eq!(buffer[(esc_value_x, esc_y)].fg, Color::Magenta);
     }
 
     #[test]
@@ -4387,7 +4540,6 @@ mod tests {
         assert!(text.contains("operator note -> sonar.resident>"));
         assert!(!text.contains("Composer:"));
         assert!(text.contains("active live note"));
-        assert!(text.contains("thinking"));
         assert!(text.contains("queued operator steering 2"));
         assert!(!text.contains("snapshot stale"));
     }

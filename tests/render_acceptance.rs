@@ -261,19 +261,9 @@ fn renderer_acceptance_frame_is_nonblank_and_contains_core_regions() {
     );
 
     let status_y = model.layout.status.y;
-    assert_eq!(
-        buffer[(model.layout.status.x, status_y)].fg,
-        Color::DarkGray
-    );
-    let (draft_label_x, draft_label_y) = find_text_position_in_row(&buffer, status_y, "draft")
-        .expect("draft status label is visible");
-    assert_cell_style(
-        &buffer,
-        draft_label_x,
-        draft_label_y,
-        Color::Yellow,
-        Modifier::BOLD,
-    );
+    assert!(find_text_position_in_row(&buffer, status_y, "idle").is_none());
+    assert!(find_text_position_in_row(&buffer, status_y, "session").is_some());
+    assert!(find_text_position_in_row(&buffer, status_y, "draft").is_none());
 
     let composer_y = model.layout.composer.y;
     let (composer_operator_x, composer_operator_y) =
@@ -933,7 +923,7 @@ fn renderer_acceptance_tool_result_without_summary_has_no_dangling_separator() {
             timestamp_y
         )]
             .fg,
-        Color::Gray
+        Color::DarkGray
     );
 }
 
@@ -993,7 +983,7 @@ fn renderer_acceptance_tool_call_request_uses_inline_timestamp_when_it_fits() {
             timestamp_y
         )]
             .fg,
-        Color::Gray
+        Color::DarkGray
     );
 }
 
@@ -1053,17 +1043,18 @@ fn renderer_acceptance_aligns_wrapped_tool_continuations_under_tool_payload() {
 
     assert_eq!(payload_y, label_y);
     assert_eq!(continuation_y, label_y + 1);
-    assert_eq!(timestamp_y, continuation_y + 1);
+    assert!(timestamp_y == continuation_y || timestamp_y == continuation_y + 1);
+    let continuation_x =
+        first_nonblank_content_x(&buffer, continuation_y).expect("continuation has content");
+    let timestamp_start_x =
+        first_nonblank_content_x(&buffer, timestamp_y).expect("timestamp has content");
+    assert!(continuation_x < payload_x);
+    assert_eq!(timestamp_start_x, continuation_x);
     assert_eq!(
-        first_nonblank_content_x(&buffer, continuation_y),
-        Some(payload_x)
+        buffer[(continuation_x - 1, continuation_y)].fg,
+        Color::DarkGray
     );
-    assert_eq!(
-        first_nonblank_content_x(&buffer, timestamp_y),
-        Some(payload_x)
-    );
-    assert_eq!(buffer[(payload_x - 1, continuation_y)].fg, Color::DarkGray);
-    assert_eq!(buffer[(payload_x, continuation_y)].fg, Color::Gray);
+    assert_eq!(buffer[(continuation_x, continuation_y)].fg, Color::Gray);
     assert_eq!(buffer[(timestamp_x, timestamp_y)].fg, Color::DarkGray);
     assert_eq!(
         buffer[(
@@ -1071,7 +1062,7 @@ fn renderer_acceptance_aligns_wrapped_tool_continuations_under_tool_payload() {
             timestamp_y
         )]
             .fg,
-        Color::Gray
+        Color::DarkGray
     );
 }
 
@@ -1131,7 +1122,7 @@ fn renderer_acceptance_wrapped_tool_uses_inline_timestamp_on_final_line_when_it_
             timestamp_y
         )]
             .fg,
-        Color::Gray
+        Color::DarkGray
     );
 }
 
@@ -1881,7 +1872,7 @@ fn renderer_acceptance_status_and_composer_are_adjacent_without_blank_gap() {
     let composer_y = model.layout.composer.y;
 
     assert_eq!(composer_y, status_y + model.layout.status.height);
-    assert!(find_text_position_in_row(&buffer, status_y, "draft").is_some());
+    assert!(find_text_position_in_row(&buffer, status_y, "draft").is_none());
     assert!(
         find_text_position_in_row(&buffer, composer_y, "operator -> sonar.resident>").is_some()
     );
@@ -3208,11 +3199,11 @@ fn renderer_acceptance_prioritizes_status_segments_in_narrow_width() {
     let text = buffer_text(&buffer);
 
     assert!(text.contains("sonar.resident"));
-    assert!(text.contains("thinking 1m 12s"));
+    assert!(!text.contains("thinking 1m 12s"));
     assert!(text.contains("queued operator steering 2"));
     assert!(text.contains("held system directives 1"));
     assert!(text.contains("oldest 1m 14s"));
-    assert!(text.contains("Esc interrupt"));
+    assert!(!text.contains("Esc interrupt"));
     assert!(!text.contains("carrier_fixture_with_a_long_identifier"));
 }
 
@@ -3263,8 +3254,9 @@ fn renderer_acceptance_does_not_render_orphan_status_separator_or_dot_when_tight
         .expect("status row is present")
         .to_string();
 
-    assert!(status_line.contains("idle"));
-    assert!(status_line.contains("provider disabled"));
+    assert!(!status_line.contains("idle"));
+    assert!(!status_line.contains("provider disabled"));
+    assert!(status_line.contains("session"));
     assert!(!status_line.contains("| ."));
     assert!(!status_line.trim_end().ends_with('|'));
 }
@@ -3281,17 +3273,17 @@ fn renderer_acceptance_truncates_overlong_priority_status_segment_in_place() {
         status: StatusViewInput {
             identity: "sonar.resident".to_string(),
             session: "carrier_fixture_1".to_string(),
-            turn_state: TurnState::Active,
-            active_phase: Some(
-                "calling site_loop_run_once_with_mailbox_and_task_projection 1m 22s".to_string(),
-            ),
-            active_turn_age: Some("1m 22s".to_string()),
-            queued_inputs: 2,
+            turn_state: TurnState::Idle,
+            active_phase: None,
+            active_turn_age: None,
+            queued_inputs: 0,
             held_system_directives: 0,
             oldest_held_age: None,
             transcript_items: 0,
             runtime_posture: RuntimePostureState::disabled(),
-            last_error: None,
+            last_error: Some(
+                "provider_cancelled_with_mailbox_and_task_projection_context".to_string(),
+            ),
         },
         composer: ComposerViewInput {
             identity: "sonar.resident".to_string(),
@@ -3307,18 +3299,16 @@ fn renderer_acceptance_truncates_overlong_priority_status_segment_in_place() {
     let text = buffer_text(&buffer);
     let status_y = model.layout.status.y;
 
-    assert!(text.contains("calling site_loop"));
+    assert!(text.contains("error provider"));
     assert!(text.contains("..."));
     assert!(!text.contains("task_projection"));
     assert!(!text.contains("queued operator steering 2"));
     let (ellipsis_x, ellipsis_y) = find_text_position_in_row(&buffer, status_y, "...")
         .expect("in-place status truncation marker is visible");
-    let (calling_x, calling_y) = find_text_position_in_row(&buffer, status_y, "calling")
-        .expect("truncated calling phase is visible");
-    let tool_x = calling_x + "calling ".chars().count() as u16;
+    let (error_x, error_y) =
+        find_text_position_in_row(&buffer, status_y, "error").expect("truncated error is visible");
 
-    assert_eq!(buffer[(calling_x, calling_y)].fg, Color::Green);
-    assert_eq!(buffer[(tool_x, calling_y)].fg, Color::Gray);
+    assert_cell_style(&buffer, error_x, error_y, Color::Yellow, Modifier::BOLD);
     assert_eq!(buffer[(ellipsis_x, ellipsis_y)].fg, Color::DarkGray);
 }
 
@@ -3367,31 +3357,22 @@ fn renderer_acceptance_colors_negative_status_values_by_semantic_state() {
 
     render_app_to_buffer(&model, &mut buffer);
     let text = buffer_text(&buffer);
+    let status_y = model.layout.status.y;
+    let status_line = text
+        .lines()
+        .nth(status_y as usize)
+        .expect("status row is present");
 
-    assert!(text.contains("interrupted"));
+    assert!(!status_line.contains("interrupted"));
     assert!(text.contains("provider failed"));
+    assert!(!status_line.contains("provider failed"));
     assert!(text.contains("error provider cancelled"));
     assert!(!text.contains("provider_cancelled"));
-    let status_y = model.layout.status.y;
-    let (interrupted_x, interrupted_y) =
-        find_text_position_in_row(&buffer, status_y, "interrupted")
-            .expect("interrupted phase is visible");
-    let (provider_label_x, provider_y) =
-        find_text_position_in_row(&buffer, status_y, "provider failed")
-            .expect("failed provider state is visible");
-    let provider_x = provider_label_x + "provider ".chars().count() as u16;
     let (error_label_x, error_y) =
         find_text_position_in_row(&buffer, status_y, "error provider cancelled")
             .expect("error state is visible");
     let error_value_x = error_label_x + "error ".chars().count() as u16;
 
-    assert_eq!(buffer[(interrupted_x, interrupted_y)].fg, Color::Red);
-    assert_eq!(buffer[(provider_x, provider_y)].fg, Color::Red);
-    assert!(
-        buffer[(provider_x, provider_y)]
-            .modifier
-            .contains(Modifier::BOLD)
-    );
     assert_cell_style(
         &buffer,
         error_label_x,
@@ -3610,9 +3591,7 @@ fn renderer_acceptance_colors_status_values_by_semantic_state() {
 
     render_app_to_buffer(&model, &mut buffer);
     let status_y = model.layout.status.y;
-    let (draft_x, draft_y) = find_text_position_in_row(&buffer, status_y, "draft 14 chars")
-        .expect("draft status is visible");
-    let draft_value_x = draft_x + "draft ".chars().count() as u16;
+    assert!(find_text_position_in_row(&buffer, status_y, "draft 14 chars").is_none());
     let (queued_x, queued_y) =
         find_text_position_in_row(&buffer, status_y, "queued operator steering 2")
             .expect("queued operator steering status is visible");
@@ -3624,12 +3603,8 @@ fn renderer_acceptance_colors_status_values_by_semantic_state() {
     let held_system_x = held_x + "held ".chars().count() as u16;
     let held_mode_x = held_x + "held system ".chars().count() as u16;
     let held_value_x = held_x + "held system directives ".chars().count() as u16;
-    let (provider_x, provider_y) =
-        find_text_position_in_row(&buffer, status_y, "provider disabled")
-            .expect("provider status is visible");
+    assert!(find_text_position_in_row(&buffer, status_y, "provider disabled").is_none());
 
-    assert_cell_style(&buffer, draft_x, draft_y, Color::Yellow, Modifier::BOLD);
-    assert_eq!(buffer[(draft_value_x, draft_y)].fg, Color::Magenta);
     assert_eq!(buffer[(queued_x, queued_y)].fg, Color::Green);
     assert_cell_style(
         &buffer,
@@ -3650,13 +3625,6 @@ fn renderer_acceptance_colors_status_values_by_semantic_state() {
     );
     assert_eq!(buffer[(held_mode_x, held_y)].fg, Color::Magenta);
     assert_eq!(buffer[(held_value_x, held_y)].fg, Color::Magenta);
-    assert_cell_style(
-        &buffer,
-        provider_x,
-        provider_y,
-        Color::Yellow,
-        Modifier::BOLD,
-    );
 }
 
 #[test]
@@ -3667,7 +3635,7 @@ fn renderer_acceptance_hides_non_actionable_status_noise() {
     render_app_to_buffer(&model, &mut buffer);
     let status_y = model.layout.status.y;
 
-    assert!(find_text_position_in_row(&buffer, status_y, "draft 14 chars").is_some());
+    assert!(find_text_position_in_row(&buffer, status_y, "draft 14 chars").is_none());
     assert!(find_text_position_in_row(&buffer, status_y, "queued operator steering 0").is_none());
     assert!(find_text_position_in_row(&buffer, status_y, "held system directives 0").is_none());
     assert!(find_text_position_in_row(&buffer, status_y, "error none").is_none());
@@ -3702,7 +3670,7 @@ fn renderer_acceptance_styles_session_and_transcript_status_as_neutral_scan_data
 }
 
 #[test]
-fn renderer_acceptance_humanizes_and_colors_runtime_status_values() {
+fn renderer_acceptance_hides_runtime_status_values() {
     let model = build_app_view(&AppViewInput {
         terminal_size: TerminalSize {
             width: 150,
@@ -3739,35 +3707,13 @@ fn renderer_acceptance_humanizes_and_colors_runtime_status_values() {
     let mut buffer = Buffer::empty(TuiRect::new(0, 0, 150, 12));
 
     render_app_to_buffer(&model, &mut buffer);
-    let status_y = model.layout.status.y;
     let text = buffer_text(&buffer);
 
-    assert!(text.contains("provider configured"));
-    assert!(text.contains("provider adapter configured without adapter"));
-    assert!(text.contains("mcp refused"));
+    assert!(!text.contains("provider configured"));
+    assert!(!text.contains("provider adapter configured without adapter"));
+    assert!(!text.contains("mcp refused"));
+    assert!(!text.contains("terminal configured"));
     assert!(!text.contains("configured_without_adapter"));
-
-    let (adapter_x, adapter_y) = find_text_position_in_row(
-        &buffer,
-        status_y,
-        "provider adapter configured without adapter",
-    )
-    .expect("provider adapter status is visible");
-    let adapter_value_x = adapter_x + "provider adapter ".chars().count() as u16;
-    assert_cell_style(&buffer, adapter_x, adapter_y, Color::Yellow, Modifier::BOLD);
-    assert_cell_style(
-        &buffer,
-        adapter_value_x,
-        adapter_y,
-        Color::Magenta,
-        Modifier::BOLD,
-    );
-
-    let (mcp_x, mcp_y) =
-        find_text_position_in_row(&buffer, status_y, "mcp refused").expect("mcp status is visible");
-    let mcp_value_x = mcp_x + "mcp ".chars().count() as u16;
-    assert_cell_style(&buffer, mcp_x, mcp_y, Color::Yellow, Modifier::BOLD);
-    assert_cell_style(&buffer, mcp_value_x, mcp_y, Color::Red, Modifier::BOLD);
 }
 
 #[test]

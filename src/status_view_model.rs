@@ -257,6 +257,17 @@ fn segment(key: &str, label: &str, value: &str) -> StatusSegment {
 }
 
 pub(crate) fn status_segment_is_visible(segment: &StatusSegment) -> bool {
+    if matches!(
+        segment.key.as_str(),
+        "turn_state"
+            | "esc_action"
+            | "provider_state"
+            | "provider_adapter_state"
+            | "mcp_state"
+            | "terminal_state"
+    ) {
+        return false;
+    }
     !matches!(
         (segment.key.as_str(), segment.value.as_str()),
         ("queued_inputs", "0")
@@ -445,7 +456,7 @@ mod tests {
 
         assert_eq!(
             model.compact_line,
-            "session carrier_1 | idle | queued operator steering 2 | held system directives 1 | transcript 8 | provider disabled | provider adapter disabled | mcp disabled | terminal disabled"
+            "session carrier_1 | queued operator steering 2 | held system directives 1 | transcript 8"
         );
     }
 
@@ -464,7 +475,7 @@ mod tests {
         assert!(!model.compact_line.contains("transcript 0"));
         assert!(!model.compact_line.contains("error none"));
         assert!(model.compact_line.contains("session carrier_1"));
-        assert!(model.compact_line.contains("provider disabled"));
+        assert!(!model.compact_line.contains("provider disabled"));
     }
 
     #[test]
@@ -477,7 +488,7 @@ mod tests {
         });
 
         assert_eq!(model.segments[2].value, "calling site_loop_run_once 8s");
-        assert!(model.compact_line.contains("calling site_loop_run_once 8s"));
+        assert!(!model.compact_line.contains("calling site_loop_run_once 8s"));
         assert!(!model.compact_line.contains("thinking 1m 12s"));
     }
 
@@ -491,7 +502,7 @@ mod tests {
         });
 
         assert_eq!(model.segments[2].value, "active 1m 12s");
-        assert!(model.compact_line.contains("thinking 1m 12s"));
+        assert!(!model.compact_line.contains("thinking 1m 12s"));
     }
 
     #[test]
@@ -520,7 +531,7 @@ mod tests {
     }
 
     #[test]
-    fn humanizes_runtime_status_values_in_compact_line() {
+    fn hides_runtime_status_values_from_compact_line() {
         let model = build_status_view(&StatusViewInput {
             runtime_posture: RuntimePostureState {
                 provider_adapter_state: ProviderAdapterState::ConfiguredWithoutAdapter,
@@ -530,7 +541,7 @@ mod tests {
         });
 
         assert!(
-            model
+            !model
                 .compact_line
                 .contains("provider adapter configured without adapter")
         );
@@ -669,7 +680,7 @@ mod tests {
             ..input()
         });
         assert!(
-            model
+            !model
                 .compact_line
                 .contains("provider adapter configured without adapter")
         );
