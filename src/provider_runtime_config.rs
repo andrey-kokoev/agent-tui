@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::provider_adapter_contract::provider_adapter_contract;
+use crate::runtime_boolean_contract::{env_flag_disabled, env_flag_enabled};
 
 fn provider_execution_env_var() -> &'static str {
     provider_adapter_contract()
@@ -56,11 +57,7 @@ impl ProviderRuntimeConfig {
         let provider = trimmed_nonempty(env.get(&contract.intelligence_provider_env_var));
         let model = trimmed_nonempty(env.get(&contract.ai_model_env_var));
         let thinking = trimmed_nonempty(env.get(&contract.ai_thinking_env_var));
-        let stream = !matches!(
-            env.get(&contract.ai_stream_env_var)
-                .map(|value| value.trim().to_ascii_lowercase()),
-            Some(value) if matches!(value.as_str(), "0" | "false" | "off" | "no")
-        );
+        let stream = !env_flag_disabled(env.get(&contract.ai_stream_env_var));
 
         let Some(provider) = provider else {
             return Self::refused("missing_provider");
@@ -96,13 +93,6 @@ impl ProviderRuntimeConfig {
             refusal_reason: Some(reason.into()),
         }
     }
-}
-
-fn env_flag_enabled(value: Option<&String>) -> bool {
-    matches!(
-        value.map(|value| value.trim().to_ascii_lowercase()),
-        Some(value) if matches!(value.as_str(), "1" | "true" | "on" | "yes")
-    )
 }
 
 fn trimmed_nonempty(value: Option<&String>) -> Option<String> {

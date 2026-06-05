@@ -2,6 +2,7 @@ use crate::input_queue::TurnState;
 use crate::mcp_runtime_config::{McpRuntimeAdmissionStatus, McpRuntimeConfig};
 use crate::provider_adapter_admission::{ProviderAdapterAdmission, ProviderAdapterAdmissionStatus};
 use crate::provider_runtime_config::{ProviderRuntimeAdmissionStatus, ProviderRuntimeConfig};
+use crate::rendering_classifier_contract::{active_turn_display, active_turn_state};
 use crate::terminal_runtime_config::{TerminalRuntimeConfig, TerminalRuntimeStatus};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -342,17 +343,17 @@ fn turn_state_status_value(
     match (turn_state, active_phase, active_turn_age) {
         (TurnState::Idle, _, _) => "idle".to_string(),
         (TurnState::Active, Some(phase), _) => phase.to_string(),
-        (TurnState::Active, None, Some(age)) => format!("active {age}"),
-        (TurnState::Active, None, None) => "active".to_string(),
+        (TurnState::Active, None, Some(age)) => format!("{} {age}", active_turn_state()),
+        (TurnState::Active, None, None) => active_turn_state().to_string(),
     }
 }
 
 pub(crate) fn turn_state_display_value(value: &str) -> String {
-    if value == "active" {
-        return "thinking".to_string();
+    if value == active_turn_state() {
+        return active_turn_display().to_string();
     }
-    if let Some(age) = value.strip_prefix("active ") {
-        return format!("thinking {age}");
+    if let Some(age) = value.strip_prefix(&format!("{} ", active_turn_state())) {
+        return format!("{} {age}", active_turn_display());
     }
     value.to_string()
 }

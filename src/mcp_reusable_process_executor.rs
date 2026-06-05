@@ -350,7 +350,7 @@ impl ReusableMcpProcess {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::carrier_protocol::{SESSION_EVENT_SCHEMA, SessionEvent, SessionEventKind};
+    use crate::carrier_protocol::{SessionEvent, SessionEventKind, session_event_schema};
     use crate::mcp_json_rpc::McpJsonRpcExchange;
     use serde_json::json;
     use std::fs;
@@ -366,7 +366,7 @@ mod tests {
             output_store_site_root: "D:/code/narada.sonar".to_string(),
             tool_name: "site_loop_run_once".to_string(),
             request_event: SessionEvent {
-                schema: SESSION_EVENT_SCHEMA.to_string(),
+                schema: session_event_schema().to_string(),
                 event_kind: SessionEventKind::ToolCallRequested,
                 event_id: "session_event_tool_request_1".to_string(),
                 occurred_at: "2026-05-30T00:00:00.000Z".to_string(),

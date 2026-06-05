@@ -1,5 +1,5 @@
 use crate::carrier_protocol::{
-    InputEvent, SESSION_EVENT_SCHEMA, SessionEvent, SessionEventKind, create_turn_terminal_payload,
+    InputEvent, SessionEvent, SessionEventKind, create_turn_terminal_payload, session_event_schema,
 };
 use crate::input_queue::{InputQueue, SessionEvidenceContext};
 use crate::provider_dispatch::{
@@ -541,7 +541,7 @@ fn session_event_with_index(
     let event_id = format!("{}_{}", clock.event_id_prefix, *next_event_index);
     *next_event_index += 1;
     SessionEvent {
-        schema: SESSION_EVENT_SCHEMA.to_string(),
+        schema: session_event_schema().to_string(),
         event_kind: kind,
         event_id,
         occurred_at: clock.occurred_at.clone(),
@@ -594,8 +594,8 @@ fn provider_terminal_error_summary(
 mod tests {
     use super::*;
     use crate::carrier_protocol::{
-        DeliveryMode, TURN_TERMINAL_PAYLOAD_SCHEMA, create_provider_request_payload,
-        parse_input_event, parse_session_event,
+        DeliveryMode, create_provider_request_payload, parse_input_event, parse_session_event,
+        turn_terminal_payload_schema,
     };
     use crate::input_queue::TurnState;
     use crate::provider_adapter_admission::ProviderAdapterKind;
@@ -860,7 +860,7 @@ mod tests {
                 return Ok(ProviderToolCallExecution::default());
             }
             let request = SessionEvent {
-                schema: SESSION_EVENT_SCHEMA.to_string(),
+                schema: session_event_schema().to_string(),
                 event_kind: SessionEventKind::ToolCallRequested,
                 event_id: format!("{}_tool_request", clock.event_id_prefix),
                 occurred_at: clock.occurred_at.clone(),
@@ -875,7 +875,7 @@ mod tests {
                 }),
             };
             let result = SessionEvent {
-                schema: SESSION_EVENT_SCHEMA.to_string(),
+                schema: session_event_schema().to_string(),
                 event_kind: SessionEventKind::ToolResultReceived,
                 event_id: format!("{}_tool_result", clock.event_id_prefix),
                 occurred_at: clock.occurred_at.clone(),
@@ -1316,7 +1316,7 @@ mod tests {
             SessionEventKind::ProviderToolCallRequested
         );
         assert_eq!(events[4].event_kind, SessionEventKind::TurnCompleted);
-        assert_eq!(events[4].payload["schema"], TURN_TERMINAL_PAYLOAD_SCHEMA);
+        assert_eq!(events[4].payload["schema"], turn_terminal_payload_schema());
         assert_eq!(events[4].payload["provider_execution_enabled"], true);
         assert_eq!(events[4].payload["terminal_status"], "completed");
 
@@ -1445,7 +1445,7 @@ mod tests {
         assert_eq!(completed_event.event_kind, SessionEventKind::TurnCompleted);
         assert_eq!(
             completed_event.payload["schema"],
-            TURN_TERMINAL_PAYLOAD_SCHEMA
+            turn_terminal_payload_schema()
         );
         assert_eq!(
             completed_event.payload["terminal_status"],

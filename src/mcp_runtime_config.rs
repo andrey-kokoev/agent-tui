@@ -1,4 +1,5 @@
 use crate::mcp_runtime_contract::mcp_runtime_contract;
+use crate::runtime_boolean_contract::env_flag_enabled;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,13 +106,6 @@ pub fn mcp_config_env_var() -> &'static str {
 
 pub fn site_mcp_fabric_env_var() -> &'static str {
     mcp_runtime_contract().site_mcp_fabric_env_var.as_str()
-}
-
-fn env_flag_enabled(value: Option<&String>) -> bool {
-    matches!(
-        value.map(|value| value.trim().to_ascii_lowercase()),
-        Some(value) if matches!(value.as_str(), "1" | "true" | "on" | "yes")
-    )
 }
 
 fn trimmed_nonempty(value: Option<&String>) -> Option<String> {

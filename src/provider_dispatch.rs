@@ -2,6 +2,7 @@ use crate::carrier_protocol::{
     InputEvent, SessionEventKind, create_provider_request_payload,
     create_provider_text_delta_payload, create_provider_tool_call_payload,
 };
+use crate::operator_routing_contract::{DirectToolRoute, ReaderRoute, operator_routing_contract};
 use crate::provider_adapter_admission::{ProviderAdapterAdmission, ProviderAdapterKind};
 use crate::provider_process_tree::ProviderProcess;
 use crate::provider_runtime_config::ProviderRuntimeConfig;
@@ -575,48 +576,62 @@ fn direct_operator_intent_tool_call(content: &str) -> Option<(String, String)> {
     if let Some(call) = parse_narada_tool_call(content) {
         return Some(call);
     }
-    if let Some(output_ref) = direct_mcp_output_reader_ref(content) {
-        return Some((
-            "mcp_output_show".to_string(),
-            json!({
-                "ref": output_ref,
-                "output_limit": 10000,
-            })
-            .to_string(),
-        ));
+    if let Some((route, output_ref)) = direct_mcp_output_reader_ref(content) {
+        let mut arguments = route.arguments.clone();
+        if let Some(arguments) = arguments.as_object_mut() {
+            arguments.insert("ref".to_string(), json!(output_ref));
+        } else {
+            return None;
+        }
+        return Some((route.tool_name.clone(), canonical_json_string(&arguments)?));
     }
-    let normalized = content
+    let normalized = normalized_operator_phrase(content);
+    operator_routing_contract()
+        .direct_tool_routes
+        .iter()
+        .find(|route| direct_route_matches(route, &normalized))
+        .and_then(|route| {
+            Some((
+                route.tool_name.clone(),
+                canonical_json_string(&route.arguments)?,
+            ))
+        })
+}
+
+fn direct_mcp_output_reader_ref(content: &str) -> Option<(&'static ReaderRoute, String)> {
+    let lower = content.to_ascii_lowercase();
+    operator_routing_contract()
+        .reader_routes
+        .iter()
+        .find(|route| {
+            route
+                .phrases
+                .iter()
+                .any(|phrase| lower.contains(&phrase.to_ascii_lowercase()))
+        })
+        .and_then(|route| {
+            extract_ref_with_prefix(content, &route.ref_prefix).map(|value| (route, value))
+        })
+}
+
+fn direct_route_matches(route: &DirectToolRoute, normalized: &str) -> bool {
+    route
+        .phrases
+        .iter()
+        .any(|phrase| normalized_operator_phrase(phrase) == normalized)
+}
+
+fn normalized_operator_phrase(content: &str) -> String {
+    content
         .trim()
         .trim_end_matches('.')
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
-        .to_ascii_lowercase();
-    match normalized.as_str() {
-        "run startup sequence" | "startup sequence" => Some((
-            "agent_context_startup_sequence".to_string(),
-            "{}".to_string(),
-        )),
-        _ => None,
-    }
+        .to_ascii_lowercase()
 }
 
-fn direct_mcp_output_reader_ref(content: &str) -> Option<String> {
-    let lower = content.to_ascii_lowercase();
-    let asks_for_reader = lower.contains("mcp_output_show")
-        || lower.contains("output reader")
-        || lower.contains("startup output reader")
-        || lower.contains("read startup output")
-        || lower.contains("read the startup output")
-        || lower.contains("read the output ref");
-    if !asks_for_reader {
-        return None;
-    }
-    extract_mcp_output_ref(content)
-}
-
-fn extract_mcp_output_ref(content: &str) -> Option<String> {
-    let prefix = "mcp_output:";
+fn extract_ref_with_prefix(content: &str, prefix: &str) -> Option<String> {
     let start = content.find(prefix)?;
     let output_id = content[start + prefix.len()..]
         .chars()
@@ -627,6 +642,10 @@ fn extract_mcp_output_ref(content: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+fn canonical_json_string(value: &Value) -> Option<String> {
+    serde_json::to_string(value).ok()
 }
 
 fn run_codex_subscription_request(
@@ -891,16 +910,21 @@ fn reasoning_effort(thinking: Option<&str>) -> Option<&'static str> {
 }
 
 fn parse_narada_tool_call(content: &str) -> Option<(String, String)> {
+    let envelope = &operator_routing_contract().tool_call_envelope;
     let trimmed = content.trim();
-    let without_fence_prefix = trimmed
-        .strip_prefix("```json")
-        .or_else(|| trimmed.strip_prefix("```"))
-        .unwrap_or(trimmed)
-        .trim();
-    let without_fence = without_fence_prefix
-        .strip_suffix("```")
-        .unwrap_or(without_fence_prefix)
-        .trim();
+    let without_fence = if envelope.fenced_json_admitted {
+        let without_fence_prefix = trimmed
+            .strip_prefix("```json")
+            .or_else(|| trimmed.strip_prefix("```"))
+            .unwrap_or(trimmed)
+            .trim();
+        without_fence_prefix
+            .strip_suffix("```")
+            .unwrap_or(without_fence_prefix)
+            .trim()
+    } else {
+        trimmed
+    };
     let start = without_fence.find('{').unwrap_or(0);
     let end = without_fence
         .rfind('}')
@@ -908,7 +932,7 @@ fn parse_narada_tool_call(content: &str) -> Option<(String, String)> {
         .unwrap_or(without_fence.len());
     let candidate = without_fence[start..end].trim();
     let parsed: Value = serde_json::from_str(candidate).ok()?;
-    let call = parsed.get("narada_tool_call")?;
+    let call = parsed.get(&envelope.field)?;
     let name = call.get("name")?.as_str()?.to_string();
     let arguments = call.get("arguments").cloned().unwrap_or_else(|| json!({}));
     Some((name, arguments.to_string()))
@@ -920,7 +944,10 @@ fn is_potential_narada_tool_call_text(content: &str) -> bool {
         return false;
     }
     if text.starts_with("```") {
-        return text.to_ascii_lowercase().starts_with("```json") || text.starts_with("```{");
+        return operator_routing_contract()
+            .tool_call_envelope
+            .fenced_json_admitted
+            && (text.to_ascii_lowercase().starts_with("```json") || text.starts_with("```{"));
     }
     if !text.starts_with('{') {
         return false;
@@ -930,15 +957,18 @@ fn is_potential_narada_tool_call_text(content: &str) -> bool {
         .filter(|character| !character.is_whitespace())
         .take(48)
         .collect::<String>();
-    "{\"narada_tool_call\"".starts_with(&compact_prefix)
-        || compact_prefix.starts_with("{\"narada_tool_call\"")
+    let envelope_prefix = format!(
+        "{{\"{}\"",
+        operator_routing_contract().tool_call_envelope.field
+    );
+    envelope_prefix.starts_with(&compact_prefix) || compact_prefix.starts_with(&envelope_prefix)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::carrier_protocol::{
-        PROVIDER_OUTPUT_PAYLOAD_SCHEMA, PROVIDER_REQUEST_PAYLOAD_SCHEMA, parse_input_event,
+        parse_input_event, provider_output_payload_schema, provider_request_payload_schema,
     };
     use crate::provider_adapter_contract::provider_adapter_contract;
     use crate::test_env_lock::ENV_LOCK;
@@ -968,6 +998,22 @@ mod tests {
             .first()
             .expect("provider contract has at least one admitted provider")
             .as_str()
+    }
+
+    fn startup_route() -> &'static DirectToolRoute {
+        operator_routing_contract()
+            .direct_tool_routes
+            .iter()
+            .find(|route| route.id == "startup_sequence")
+            .expect("startup route is present")
+    }
+
+    fn output_reader_route() -> &'static ReaderRoute {
+        operator_routing_contract()
+            .reader_routes
+            .iter()
+            .find(|route| route.id == "mcp_output_reader")
+            .expect("output reader route is present")
     }
 
     fn provider_process_input() -> InputEvent {
@@ -1106,7 +1152,7 @@ mod tests {
             text.kind.session_event_kind(),
             SessionEventKind::ProviderTextDeltaRecorded
         );
-        assert_eq!(text.payload["schema"], PROVIDER_OUTPUT_PAYLOAD_SCHEMA);
+        assert_eq!(text.payload["schema"], provider_output_payload_schema());
         assert_eq!(text.payload["provider_output_kind"], "text_delta");
         assert_eq!(text.payload["text_delta"], "hello");
 
@@ -1116,7 +1162,7 @@ mod tests {
             tool.kind.session_event_kind(),
             SessionEventKind::ProviderToolCallRequested
         );
-        assert_eq!(tool.payload["schema"], PROVIDER_OUTPUT_PAYLOAD_SCHEMA);
+        assert_eq!(tool.payload["schema"], provider_output_payload_schema());
         assert_eq!(tool.payload["provider_output_kind"], "tool_call_request");
         assert_eq!(tool.payload["tool_name"], "site_loop_run_once");
     }
@@ -1131,7 +1177,7 @@ mod tests {
         let (tool_name, arguments) =
             parse_narada_tool_call(&envelope).expect("reader tool envelope parses");
 
-        assert_eq!(tool_name, "mcp_output_show");
+        assert_eq!(tool_name, output_reader_route().tool_name);
         assert_eq!(
             arguments,
             r#"{"output_ref":"mcp_output:o_6cd77433e384445e976c7fdf"}"#
@@ -1155,7 +1201,7 @@ mod tests {
         assert_eq!(request.input_event_id, input.event_id);
         assert_eq!(request.content_preview, input.content);
         assert_eq!(request.provider_runtime_status, "configured");
-        assert_eq!(payload["schema"], PROVIDER_REQUEST_PAYLOAD_SCHEMA);
+        assert_eq!(payload["schema"], provider_request_payload_schema());
         assert_eq!(
             payload["provider_request_status"],
             "recorded_not_dispatched"
@@ -1173,31 +1219,38 @@ mod tests {
 
     #[test]
     fn routes_startup_sequence_intent_directly_to_startup_tool() {
+        let route = startup_route();
+        let first_phrase = route.phrases[0].as_str();
+        let second_phrase = route.phrases[1].replace(' ', "   ");
         assert_eq!(
-            direct_operator_intent_tool_call("run startup sequence"),
-            Some((
-                "agent_context_startup_sequence".to_string(),
-                "{}".to_string()
-            ))
+            direct_operator_intent_tool_call(first_phrase),
+            Some((route.tool_name.clone(), route.arguments.to_string()))
         );
         assert_eq!(
-            direct_operator_intent_tool_call("  startup   sequence.  "),
-            Some((
-                "agent_context_startup_sequence".to_string(),
-                "{}".to_string()
-            ))
+            direct_operator_intent_tool_call(&format!("  {second_phrase}.  ")),
+            Some((route.tool_name.clone(), route.arguments.to_string()))
         );
         assert_eq!(direct_operator_intent_tool_call("check startup docs"), None);
     }
 
     #[test]
     fn routes_operator_pasted_narada_tool_call_directly() {
+        let route = output_reader_route();
+        let output_ref = "mcp_output:o_98b8292361cf4937a6282193";
+        let envelope = json!({
+            operator_routing_contract().tool_call_envelope.field.as_str(): {
+                "name": route.tool_name,
+                "arguments": {
+                    "ref": output_ref,
+                    "output_limit": route.arguments["output_limit"],
+                },
+            }
+        })
+        .to_string();
         assert_eq!(
-            direct_operator_intent_tool_call(
-                r#"{"narada_tool_call":{"name":"mcp_output_show","arguments":{"ref":"mcp_output:o_98b8292361cf4937a6282193","output_limit":10000}}}"#
-            ),
+            direct_operator_intent_tool_call(&envelope),
             Some((
-                "mcp_output_show".to_string(),
+                route.tool_name.clone(),
                 r#"{"output_limit":10000,"ref":"mcp_output:o_98b8292361cf4937a6282193"}"#
                     .to_string()
             ))
@@ -1206,20 +1259,23 @@ mod tests {
 
     #[test]
     fn routes_operator_reader_request_with_output_ref_directly() {
+        let route = output_reader_route();
+        let phrase = route
+            .phrases
+            .iter()
+            .find(|phrase| phrase.contains("reader"))
+            .expect("reader phrase is present");
+        let output_ref = "mcp_output:o_98b8292361cf4937a6282193";
         assert_eq!(
-            direct_operator_intent_tool_call(
-                "Call the startup output reader now for mcp_output:o_98b8292361cf4937a6282193."
-            ),
+            direct_operator_intent_tool_call(&format!("Call the {phrase} now for {output_ref}.")),
             Some((
-                "mcp_output_show".to_string(),
+                route.tool_name.clone(),
                 r#"{"output_limit":10000,"ref":"mcp_output:o_98b8292361cf4937a6282193"}"#
                     .to_string()
             ))
         );
         assert_eq!(
-            direct_operator_intent_tool_call(
-                "Discuss mcp_output:o_98b8292361cf4937a6282193 generally"
-            ),
+            direct_operator_intent_tool_call(&format!("Discuss {output_ref} generally")),
             None
         );
     }
@@ -1256,7 +1312,8 @@ mod tests {
     #[test]
     fn codex_adapter_routes_startup_sequence_without_provider_process() {
         let mut input = parse_input_event(INPUT_FIXTURE).expect("input parses");
-        input.content = "run startup sequence".to_string();
+        let route = startup_route();
+        input.content = route.phrases[0].clone();
         let runtime_config = ProviderRuntimeConfig::from_env_map(&provider_runtime_env(&[
             ("execution_enabled", "true"),
             ("provider", admitted_provider()),
@@ -1279,11 +1336,11 @@ mod tests {
         assert_eq!(record.status, ProviderDispatchStatus::Completed);
         assert_eq!(record.outputs.len(), 1);
         assert_eq!(record.outputs[0].kind, ProviderOutputKind::ToolCallRequest);
+        assert_eq!(record.outputs[0].payload["tool_name"], route.tool_name);
         assert_eq!(
-            record.outputs[0].payload["tool_name"],
-            "agent_context_startup_sequence"
+            record.outputs[0].payload["arguments_summary"],
+            route.arguments.to_string()
         );
-        assert_eq!(record.outputs[0].payload["arguments_summary"], "{}");
     }
 
     #[test]

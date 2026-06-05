@@ -1,4 +1,7 @@
 use crate::mcp_fabric_boundary::{McpToolRequest, McpToolResult};
+use crate::mcp_json_rpc_contract::{
+    initialize_method, initialized_notification_method, jsonrpc_version, tools_call_method,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -35,9 +38,9 @@ pub struct McpJsonRpcExchange {
 impl JsonRpcRequest {
     pub fn mcp_initialize(id: u64, client_name: impl Into<String>) -> Self {
         Self {
-            jsonrpc: "2.0".to_string(),
+            jsonrpc: jsonrpc_version().to_string(),
             id,
-            method: "initialize".to_string(),
+            method: initialize_method().to_string(),
             params: Some(json!({
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
@@ -51,18 +54,18 @@ impl JsonRpcRequest {
 
     pub fn mcp_initialized_notification() -> Self {
         Self {
-            jsonrpc: "2.0".to_string(),
+            jsonrpc: jsonrpc_version().to_string(),
             id: 0,
-            method: "notifications/initialized".to_string(),
+            method: initialized_notification_method().to_string(),
             params: Some(json!({})),
         }
     }
 
     pub fn mcp_tools_call(id: u64, request: &McpToolRequest, arguments: Value) -> Self {
         Self {
-            jsonrpc: "2.0".to_string(),
+            jsonrpc: jsonrpc_version().to_string(),
             id,
-            method: "tools/call".to_string(),
+            method: tools_call_method().to_string(),
             params: Some(json!({
                 "name": request.tool_name,
                 "arguments": arguments,
@@ -81,7 +84,7 @@ impl JsonRpcResponse {
     pub fn parse_line(line: &str) -> Result<Self, String> {
         let response: Self = serde_json::from_str(line)
             .map_err(|error| format!("mcp_json_rpc_response_parse_failed:{error}"))?;
-        if response.jsonrpc != "2.0" {
+        if response.jsonrpc != jsonrpc_version() {
             return Err(format!(
                 "mcp_json_rpc_response_version_invalid:{}",
                 response.jsonrpc

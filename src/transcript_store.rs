@@ -153,7 +153,7 @@ impl TranscriptStore {
 mod tests {
     use super::*;
     use crate::carrier_protocol::{
-        SESSION_EVENT_SCHEMA, SessionEvent, SessionEventKind, TURN_TERMINAL_PAYLOAD_SCHEMA,
+        SessionEvent, SessionEventKind, session_event_schema, turn_terminal_payload_schema,
     };
     use crate::transcript_projection::{TranscriptActor, TranscriptItemKind};
     use serde_json::json;
@@ -164,7 +164,7 @@ mod tests {
         payload: serde_json::Value,
     ) -> SessionEvent {
         SessionEvent {
-            schema: SESSION_EVENT_SCHEMA.to_string(),
+            schema: session_event_schema().to_string(),
             event_kind,
             event_id: event_id.to_string(),
             occurred_at: "2026-05-30T00:00:00.000Z".to_string(),
@@ -318,7 +318,7 @@ mod tests {
             "session_event_1",
             SessionEventKind::TurnCompleted,
             json!({
-                "schema": TURN_TERMINAL_PAYLOAD_SCHEMA,
+                "schema": turn_terminal_payload_schema(),
                 "turn_id": "turn_1",
                 "terminal_status": "completed",
                 "provider_request_status": "completed",
@@ -386,7 +386,7 @@ mod tests {
                 "session_event_turn_step241_4",
                 SessionEventKind::TurnCompleted,
                 json!({
-                    "schema": TURN_TERMINAL_PAYLOAD_SCHEMA,
+                    "schema": turn_terminal_payload_schema(),
                     "turn_id": "turn_step241_1",
                     "terminal_status": "completed",
                     "provider_request_status": "completed",
@@ -445,7 +445,7 @@ mod tests {
             "session_event_2",
             SessionEventKind::TurnFailed,
             json!({
-                "schema": TURN_TERMINAL_PAYLOAD_SCHEMA,
+                "schema": turn_terminal_payload_schema(),
                 "turn_id": "turn_1",
                 "terminal_status": "failed",
                 "provider_request_status": "failed",

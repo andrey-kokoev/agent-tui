@@ -1,4 +1,4 @@
-use crate::carrier_protocol::{SESSION_EVENT_SCHEMA, SessionEvent, SessionEventKind};
+use crate::carrier_protocol::{SessionEvent, SessionEventKind, session_event_schema};
 use crate::input_queue::SessionEvidenceContext;
 use crate::mcp_fabric_transport::McpFabricPreparedToolCall;
 use crate::mcp_process_supervisor::{
@@ -177,7 +177,7 @@ impl<E: McpRuntimeToolExecutor> McpRuntimeExecutionBridge<E> {
         clock: &McpRuntimeExecutionClock,
     ) -> SessionEvent {
         SessionEvent {
-            schema: SESSION_EVENT_SCHEMA.to_string(),
+            schema: session_event_schema().to_string(),
             event_kind: SessionEventKind::ToolResultReceived,
             event_id: self.next_event_id(clock),
             occurred_at: clock.occurred_at.clone(),
@@ -219,7 +219,7 @@ impl<E: McpRuntimeToolExecutor> McpRuntimeExecutionBridge<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::carrier_protocol::{SESSION_EVENT_SCHEMA, SessionEventKind, parse_session_event};
+    use crate::carrier_protocol::{SessionEventKind, parse_session_event, session_event_schema};
     use crate::mcp_fabric_boundary::McpToolResult;
     use crate::mcp_fabric_transport::McpFabricPreparedToolCall;
     use crate::mcp_json_rpc::McpJsonRpcExchange;
@@ -263,7 +263,7 @@ mod tests {
             output_store_site_root: "D:/code/narada.sonar".to_string(),
             tool_name: "site_loop_run_once".to_string(),
             request_event: SessionEvent {
-                schema: SESSION_EVENT_SCHEMA.to_string(),
+                schema: session_event_schema().to_string(),
                 event_kind: SessionEventKind::ToolCallRequested,
                 event_id: "session_event_tool_request_1".to_string(),
                 occurred_at: "2026-05-30T00:00:00.000Z".to_string(),

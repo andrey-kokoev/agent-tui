@@ -31,34 +31,42 @@ pub fn parse_operator_submit(text: &str) -> OperatorSubmit {
     }
 
     let trimmed = text.trim();
-    if !trimmed.starts_with('/') {
+    let normalized_full = normalize_command_token(trimmed);
+    if !trimmed.starts_with('/') && command_name_for_token(&normalized_full).is_none() {
         return OperatorSubmit::AgentInput(text.to_string());
     }
 
     let mut parts = trimmed.split_whitespace();
     let raw_command = parts.next().unwrap_or_default();
-    let command = raw_command.to_ascii_lowercase();
+    let command = normalize_command_token(raw_command);
     let value = parts.collect::<Vec<_>>().join(" ");
-    match command.as_str() {
-        "/help" => OperatorSubmit::CarrierCommand(CarrierCommand::Help),
-        "/status" => OperatorSubmit::CarrierCommand(CarrierCommand::Status),
-        "/stats" => OperatorSubmit::CarrierCommand(CarrierCommand::Stats {
+    let command_name = command_name_for_token(&normalized_full)
+        .or_else(|| command_name_for_token(&command))
+        .unwrap_or("unknown");
+    match command_name {
+        "help" => OperatorSubmit::CarrierCommand(CarrierCommand::Help),
+        "status" => OperatorSubmit::CarrierCommand(CarrierCommand::Status),
+        "stats" => OperatorSubmit::CarrierCommand(CarrierCommand::Stats {
             value: nonempty_value(value),
         }),
-        "/model" => OperatorSubmit::CarrierCommand(CarrierCommand::Model {
+        "model" => OperatorSubmit::CarrierCommand(CarrierCommand::Model {
             value: nonempty_value(value),
         }),
-        "/thinking" => OperatorSubmit::CarrierCommand(CarrierCommand::Thinking {
+        "thinking" => OperatorSubmit::CarrierCommand(CarrierCommand::Thinking {
             value: nonempty_value(value),
         }),
-        "/tool-output" | "/tool-outputs" => {
-            OperatorSubmit::CarrierCommand(CarrierCommand::ToolOutput {
-                value: nonempty_value(value),
-            })
-        }
-        "/clear" => OperatorSubmit::CarrierCommand(CarrierCommand::Clear),
-        "/exit" | "/quit" => OperatorSubmit::CarrierCommand(CarrierCommand::Exit),
-        "/queue" => parse_queue_command(&value),
+        "tool_output" => OperatorSubmit::CarrierCommand(CarrierCommand::ToolOutput {
+            value: nonempty_value(value),
+        }),
+        "clear" => OperatorSubmit::CarrierCommand(CarrierCommand::Clear),
+        "exit" => OperatorSubmit::CarrierCommand(CarrierCommand::Exit),
+        "queue_show" => parse_queue_command(&value),
+        "queue_clear" => OperatorSubmit::CarrierCommand(CarrierCommand::QueueClear),
+        "queue_drop" => parse_queue_command(
+            normalized_full
+                .strip_prefix(queue_command_prefix("queue_show"))
+                .unwrap_or(value.as_str()),
+        ),
         _ => OperatorSubmit::CarrierCommand(CarrierCommand::Unknown { command }),
     }
 }
@@ -68,17 +76,38 @@ fn parse_queue_command(value: &str) -> OperatorSubmit {
     if trimmed.is_empty() {
         return OperatorSubmit::CarrierCommand(CarrierCommand::QueueShow);
     }
-    if trimmed == "clear" {
+    if trimmed == queue_command_suffix("queue_clear") {
         return OperatorSubmit::CarrierCommand(CarrierCommand::QueueClear);
     }
-    if let Some(index) = trimmed.strip_prefix("drop ") {
+    if let Some(index) = trimmed.strip_prefix(&format!("{} ", queue_command_suffix("queue_drop"))) {
         if let Ok(index) = index.trim().parse::<usize>() {
             return OperatorSubmit::CarrierCommand(CarrierCommand::QueueDrop { index });
         }
     }
     OperatorSubmit::CarrierCommand(CarrierCommand::Unknown {
-        command: format!("/queue {trimmed}"),
+        command: format!("{} {trimmed}", queue_command_prefix("queue_show")),
     })
+}
+
+fn queue_command_prefix(name: &str) -> &'static str {
+    command_named(name)
+        .and_then(|command| command.primary.split_whitespace().next())
+        .expect("bundled carrier command contract must define queue command prefix")
+}
+
+fn queue_command_suffix(name: &str) -> String {
+    command_named(name)
+        .map(|command| {
+            command
+                .primary
+                .split_whitespace()
+                .skip(1)
+                .take_while(|part| !part.starts_with('<'))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| name.trim_start_matches("queue_").to_string())
 }
 
 fn nonempty_value(value: String) -> Option<String> {
@@ -193,6 +222,10 @@ mod tests {
             parse_operator_submit("/quit"),
             OperatorSubmit::CarrierCommand(CarrierCommand::Exit)
         );
+        assert_eq!(
+            parse_operator_submit("exit"),
+            OperatorSubmit::CarrierCommand(CarrierCommand::Exit)
+        );
     }
 
     #[test]
@@ -229,3 +262,6 @@ mod tests {
         );
     }
 }
+use crate::carrier_command_contract::{
+    command_name_for_token, command_named, normalize_command_token,
+};

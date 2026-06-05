@@ -146,7 +146,7 @@ impl RuntimeStep {
 mod tests {
     use super::*;
     use crate::carrier_protocol::{
-        SESSION_EVENT_SCHEMA, SessionEvent, SessionEventKind, parse_session_event,
+        SessionEvent, SessionEventKind, parse_session_event, session_event_schema,
     };
     use crate::provider_adapter_admission::ProviderAdapterKind;
     use crate::provider_adapter_contract::provider_adapter_contract;
@@ -242,7 +242,7 @@ mod tests {
                 return Ok(ProviderToolCallExecution::default());
             }
             let request = SessionEvent {
-                schema: SESSION_EVENT_SCHEMA.to_string(),
+                schema: session_event_schema().to_string(),
                 event_kind: SessionEventKind::ToolCallRequested,
                 event_id: format!("{}_runtime_tool_request", clock.event_id_prefix),
                 occurred_at: clock.occurred_at.clone(),

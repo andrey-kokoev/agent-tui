@@ -199,7 +199,7 @@ mod tests {
             output_store_site_root: "D:/code/narada.sonar".to_string(),
             tool_name: "site_loop_run_once".to_string(),
             request_event: SessionEvent {
-                schema: crate::carrier_protocol::SESSION_EVENT_SCHEMA.to_string(),
+                schema: crate::carrier_protocol::session_event_schema().to_string(),
                 event_kind: SessionEventKind::ToolCallRequested,
                 event_id: "session_event_tool_request_1".to_string(),
                 occurred_at: "2026-05-30T00:00:00.000Z".to_string(),

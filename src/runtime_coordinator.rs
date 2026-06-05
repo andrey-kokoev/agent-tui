@@ -1,13 +1,14 @@
 use crate::carrier_command::{CarrierCommand, OperatorSubmit, parse_operator_submit};
 use crate::carrier_protocol::{
-    DeliveryMode, INPUT_EVENT_SCHEMA, InputEvent, SESSION_EVENT_SCHEMA, SessionEvent,
-    SessionEventKind, SourceKind, Transport,
+    DeliveryMode, InputEvent, SessionEvent, SessionEventKind, SourceKind, Transport,
+    input_event_schema, session_event_schema,
 };
 use crate::control_jsonl::ControlJsonlError;
 use crate::control_watcher::ControlJsonlWatcher;
 use crate::input_queue::{
     AdmissionDecision, InputQueue, QueuedInputSummary, SessionEvidenceContext,
 };
+use crate::provider_adapter_contract::provider_adapter_contract;
 use crate::session_jsonl::append_session_event;
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -176,16 +177,17 @@ impl RuntimeCoordinator {
         session_jsonl_path: impl Into<PathBuf>,
         evidence_context: SessionEvidenceContext,
     ) -> Self {
+        let provider_contract = provider_adapter_contract();
         Self {
             watcher: ControlJsonlWatcher::new(control_jsonl_path),
             queue: InputQueue::new(),
             evidence_context,
             session_jsonl_path: session_jsonl_path.into(),
             next_evidence_index: 1,
-            session_model: std::env::var("NARADA_AI_MODEL")
+            session_model: std::env::var(&provider_contract.ai_model_env_var)
                 .ok()
                 .filter(|value| !value.trim().is_empty()),
-            session_thinking: std::env::var("NARADA_AI_THINKING")
+            session_thinking: std::env::var(&provider_contract.ai_thinking_env_var)
                 .ok()
                 .filter(|value| !value.trim().is_empty()),
             display_tool_outputs: true,
@@ -452,7 +454,7 @@ impl RuntimeCoordinator {
         clock: &RuntimeCoordinatorClock,
     ) -> Result<(), String> {
         let event = SessionEvent {
-            schema: SESSION_EVENT_SCHEMA.to_string(),
+            schema: session_event_schema().to_string(),
             event_kind: SessionEventKind::InterruptRequested,
             event_id: self.next_event_id(clock),
             occurred_at: clock.occurred_at.clone(),
@@ -518,7 +520,7 @@ impl RuntimeCoordinator {
         clock: &RuntimeCoordinatorClock,
     ) -> SessionEvent {
         SessionEvent {
-            schema: SESSION_EVENT_SCHEMA.to_string(),
+            schema: session_event_schema().to_string(),
             event_kind: SessionEventKind::InputDroppedByOperator,
             event_id: self.next_event_id(clock),
             occurred_at: clock.occurred_at.clone(),
@@ -542,7 +544,7 @@ impl RuntimeCoordinator {
         details: serde_json::Value,
     ) -> Result<(), String> {
         let event = SessionEvent {
-            schema: SESSION_EVENT_SCHEMA.to_string(),
+            schema: session_event_schema().to_string(),
             event_kind: SessionEventKind::CarrierCommandExecuted,
             event_id: self.next_event_id(clock),
             occurred_at: clock.occurred_at.clone(),
@@ -563,7 +565,7 @@ impl RuntimeCoordinator {
 
     fn operator_composer_input(&self, text: String, clock: &RuntimeCoordinatorClock) -> InputEvent {
         InputEvent {
-            schema: INPUT_EVENT_SCHEMA.to_string(),
+            schema: input_event_schema().to_string(),
             event_id: format!("input_operator_composer_{}", self.next_evidence_index),
             source_kind: SourceKind::Operator,
             source_id: "operator".to_string(),

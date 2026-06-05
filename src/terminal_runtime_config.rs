@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use crate::runtime_boolean_contract::env_flag_enabled;
 use crate::terminal_runtime_contract::terminal_runtime_contract;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,13 +77,6 @@ impl TerminalRuntimeConfig {
             refusal_reason: Some(reason.into()),
         }
     }
-}
-
-fn env_flag_enabled(value: Option<&String>) -> bool {
-    matches!(
-        value.map(|value| value.trim().to_ascii_lowercase()),
-        Some(value) if matches!(value.as_str(), "1" | "true" | "on" | "yes")
-    )
 }
 
 fn trimmed_nonempty(value: Option<&String>) -> Option<String> {

@@ -1,4 +1,4 @@
-use crate::carrier_protocol::{PayloadRef, SESSION_EVENT_SCHEMA, SessionEvent, SessionEventKind};
+use crate::carrier_protocol::{PayloadRef, SessionEvent, SessionEventKind, session_event_schema};
 use crate::input_queue::SessionEvidenceContext;
 use serde_json::json;
 use std::collections::BTreeSet;
@@ -181,7 +181,7 @@ fn session_event(
     payload: serde_json::Value,
 ) -> SessionEvent {
     SessionEvent {
-        schema: SESSION_EVENT_SCHEMA.to_string(),
+        schema: session_event_schema().to_string(),
         event_kind: kind,
         event_id: event_id.into(),
         occurred_at: occurred_at.into(),

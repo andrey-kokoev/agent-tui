@@ -8,6 +8,7 @@ use crate::mcp_runtime_execution::{
     McpRuntimeExecutionBridge, McpRuntimeExecutionClock, McpRuntimeExecutionResult,
     McpRuntimeToolExecutor,
 };
+use crate::operator_routing_contract::{output_reader_tool_name, tool_aliases_for};
 use crate::provider_dispatch::{ProviderOutputKind, ProviderOutputRecord};
 use crate::turn_coordinator::{
     NoopProviderToolCallExecutor, ProviderToolCallExecution, ProviderToolCallExecutor,
@@ -118,7 +119,7 @@ fn paged_mcp_output_advisory(body: &str) -> Option<String> {
         return None;
     }
     let reader_tool = value.get("reader_tool").and_then(Value::as_str)?;
-    if reader_tool != "mcp_output_show" {
+    if reader_tool != output_reader_tool_name() {
         return None;
     }
     let output_ref = value
@@ -247,17 +248,11 @@ fn resolve_provider_tool_alias(
     if boundary.assert_tool_access(&request.tool_name).is_ok() {
         return request;
     }
-    let aliases: &[&str] = match request.tool_name.as_str() {
-        "startup_sequence" | "agent_context_startup_sequence" => {
-            &["agent_context_startup_sequence", "startup_sequence"]
-        }
-        "mcp_payload_read" | "mcp_payload_show" => &["mcp_payload_show", "mcp_payload_read"],
-        _ => &[],
-    };
+    let aliases = tool_aliases_for(&request.tool_name).unwrap_or(&[]);
     for alias in aliases {
         if boundary.assert_tool_access(alias).is_ok() {
             return McpToolRequest {
-                tool_name: (*alias).to_string(),
+                tool_name: alias.to_string(),
                 ..request
             };
         }

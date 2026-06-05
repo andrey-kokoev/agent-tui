@@ -1,6 +1,14 @@
 use crate::app_view_model::AppViewModel;
 use crate::composer_draft::ComposerDraftState;
 use crate::layout_model::Rect;
+use crate::rendering_classifier_contract::{
+    DiagnosticSeverityClass, RenderClassification, calling_phase, calling_prefix,
+    diagnostic_prefix, diagnostic_severity_class, operator_activity_action_is_known,
+    operator_activity_actor, runtime_status_class, semantic_status_value_class,
+    terminal_status_is_positive, thinking_phase, thinking_prefix, tool_result_prefix_class,
+    tool_result_summary_class, turn_marker_is_suppressed, turn_state_duration_phase_is_known,
+    turn_state_is_negative, turn_state_is_positive,
+};
 use crate::status_view_model::{
     StatusSegment, status_segment_compact_text, status_segment_is_visible, turn_state_display_value,
 };
@@ -12,7 +20,10 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect as TuiRect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Widget};
+use ratatui::widgets::{
+    Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, StatefulWidget,
+    Widget,
+};
 
 pub fn render_app_to_buffer(model: &AppViewModel, buffer: &mut Buffer) {
     let composer = TextareaComposer::from_draft(&ComposerDraftState {
@@ -49,11 +60,9 @@ pub fn render_app_to_frame_with_composer(
 }
 
 fn render_transcript_to_buffer(model: &AppViewModel, buffer: &mut Buffer) {
-    Widget::render(
-        transcript_paragraph(model),
-        to_tui_rect(model.layout.transcript),
-        buffer,
-    );
+    let area = to_tui_rect(model.layout.transcript);
+    Widget::render(transcript_paragraph(model), area, buffer);
+    render_transcript_scrollbar_to_buffer(model, area, buffer);
 }
 
 fn render_status_to_buffer(model: &AppViewModel, buffer: &mut Buffer) {
@@ -79,10 +88,11 @@ fn render_textarea_composer_to_buffer(
 }
 
 fn render_transcript_to_frame(model: &AppViewModel, frame: &mut ratatui::Frame<'_>) {
-    frame.render_widget(
-        transcript_paragraph(model),
-        to_tui_rect(model.layout.transcript),
-    );
+    let area = to_tui_rect(model.layout.transcript);
+    frame.render_widget(transcript_paragraph(model), area);
+    if let Some(mut state) = transcript_scrollbar_state(model) {
+        frame.render_stateful_widget(transcript_scrollbar(), area, &mut state);
+    }
 }
 
 fn render_status_to_frame(model: &AppViewModel, frame: &mut ratatui::Frame<'_>) {
@@ -107,8 +117,8 @@ fn transcript_paragraph(model: &AppViewModel) -> Paragraph<'static> {
     let inner_width = model.layout.transcript.width.saturating_sub(2).max(1) as usize;
     let inner_height = model.layout.transcript.height.saturating_sub(2).max(1) as usize;
     let agent_identity = transcript_agent_identity(model);
-    let lines = visible_transcript_blocks(
-        transcript_blocks_with_active_marker(model, &agent_identity, inner_width),
+    let lines = visible_transcript_lines(
+        transcript_lines(model, &agent_identity, inner_width),
         inner_height,
         model.transcript_scroll_offset,
     );
@@ -124,42 +134,24 @@ fn transcript_title() -> Line<'static> {
     Line::from(Span::styled("Transcript", ui_theme::agent_label()))
 }
 
-fn visible_transcript_blocks(
-    blocks: Vec<Vec<Line<'static>>>,
+fn transcript_lines(
+    model: &AppViewModel,
+    agent_identity: &str,
+    inner_width: usize,
+) -> Vec<Line<'static>> {
+    flatten_transcript_blocks(transcript_blocks_with_active_marker(
+        model,
+        agent_identity,
+        inner_width,
+    ))
+}
+
+fn visible_transcript_lines(
+    lines: Vec<Line<'static>>,
     max_lines: usize,
     scroll_offset: usize,
 ) -> Vec<Line<'static>> {
-    if scroll_offset == 0 {
-        return visible_tail_blocks(blocks, max_lines);
-    }
-    visible_scrolled_lines(flatten_transcript_blocks(blocks), max_lines, scroll_offset)
-}
-
-fn visible_tail_blocks(blocks: Vec<Vec<Line<'static>>>, max_lines: usize) -> Vec<Line<'static>> {
-    let mut selected: Vec<Vec<Line<'static>>> = Vec::new();
-    let mut used = 0usize;
-    for block in blocks.into_iter().rev() {
-        let separator = if selected.is_empty() { 0 } else { 1 };
-        let required = block.len() + separator;
-        if used + required <= max_lines {
-            used += required;
-            selected.push(block);
-        } else if selected.is_empty() {
-            selected.push(visible_tail_lines(block, max_lines));
-            break;
-        } else {
-            break;
-        }
-    }
-
-    let mut lines = Vec::new();
-    for block in selected.into_iter().rev() {
-        if !lines.is_empty() {
-            lines.push(Line::from(""));
-        }
-        lines.extend(block);
-    }
-    lines
+    visible_scrolled_lines(lines, max_lines, scroll_offset)
 }
 
 fn flatten_transcript_blocks(blocks: Vec<Vec<Line<'static>>>) -> Vec<Line<'static>> {
@@ -178,63 +170,56 @@ fn visible_scrolled_lines(
     max_lines: usize,
     scroll_offset: usize,
 ) -> Vec<Line<'static>> {
-    if lines.len() <= max_lines {
-        return lines;
-    }
-    let end = lines.len().saturating_sub(scroll_offset).max(max_lines);
-    let start = end.saturating_sub(max_lines);
-    let visible =
-        trim_boundary_blank_lines(lines.into_iter().skip(start).take(end - start).collect());
-    if visible.is_empty() && max_lines > 0 {
-        return vec![truncated_context_marker_line()];
-    }
-    visible
-}
-
-fn trim_boundary_blank_lines(mut lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
-    while lines.first().is_some_and(line_is_blank) {
-        lines.remove(0);
-    }
-    while lines.last().is_some_and(line_is_blank) {
-        lines.pop();
-    }
-    lines
-}
-
-fn line_is_blank(line: &Line<'static>) -> bool {
-    line.spans.iter().all(|span| span.content.trim().is_empty())
-}
-
-fn truncated_context_marker_line() -> Line<'static> {
-    Line::from(vec![
-        Span::styled("  ".to_string(), muted_style()),
-        Span::styled("...".to_string(), muted_style()),
-    ])
-}
-
-fn visible_tail_lines(lines: Vec<Line<'static>>, max_lines: usize) -> Vec<Line<'static>> {
-    let line_count = lines.len();
-    if line_count <= max_lines {
-        return lines;
-    }
     if max_lines == 0 {
         return Vec::new();
     }
-    if max_lines == 1 {
-        return lines.into_iter().take(1).collect();
+    if lines.len() <= max_lines {
+        return lines;
     }
+    let max_scroll = lines.len().saturating_sub(max_lines);
+    let scroll_offset = scroll_offset.min(max_scroll);
+    let end = lines.len().saturating_sub(scroll_offset).max(max_lines);
+    let start = end.saturating_sub(max_lines);
+    lines.into_iter().skip(start).take(end - start).collect()
+}
 
-    let tail_count = max_lines.saturating_sub(2);
-    let mut visible = Vec::with_capacity(max_lines);
-    let mut iter = lines.into_iter();
-    if let Some(label) = iter.next() {
-        visible.push(label);
+fn transcript_scroll_position(model: &AppViewModel) -> Option<(usize, usize, usize)> {
+    let inner_width = model.layout.transcript.width.saturating_sub(2).max(1) as usize;
+    let inner_height = model.layout.transcript.height.saturating_sub(2).max(1) as usize;
+    let agent_identity = transcript_agent_identity(model);
+    let content_length = transcript_lines(model, &agent_identity, inner_width).len();
+    if content_length <= inner_height {
+        return None;
     }
-    visible.push(truncated_context_marker_line());
-    let remaining: Vec<Line<'static>> = iter.collect();
-    let start = remaining.len().saturating_sub(tail_count);
-    visible.extend(remaining.into_iter().skip(start));
-    visible
+    let max_scroll = content_length.saturating_sub(inner_height);
+    let from_top = max_scroll.saturating_sub(model.transcript_scroll_offset.min(max_scroll));
+    Some((content_length, inner_height, from_top))
+}
+
+fn transcript_scrollbar_state(model: &AppViewModel) -> Option<ScrollbarState> {
+    let (content_length, viewport_length, from_top) = transcript_scroll_position(model)?;
+    Some(
+        ScrollbarState::new(content_length)
+            .viewport_content_length(viewport_length)
+            .position(from_top),
+    )
+}
+
+fn transcript_scrollbar<'a>() -> Scrollbar<'a> {
+    Scrollbar::default()
+        .orientation(ScrollbarOrientation::VerticalRight)
+        .thumb_symbol("┃")
+        .track_symbol(Some("│"))
+        .begin_symbol(None)
+        .end_symbol(None)
+        .style(muted_style())
+        .thumb_style(ui_theme::agent_label())
+}
+
+fn render_transcript_scrollbar_to_buffer(model: &AppViewModel, area: TuiRect, buffer: &mut Buffer) {
+    if let Some(mut state) = transcript_scrollbar_state(model) {
+        StatefulWidget::render(transcript_scrollbar(), area, buffer, &mut state);
+    }
 }
 
 fn transcript_blocks(
@@ -351,12 +336,14 @@ fn active_turn_marker_block(
 }
 
 fn turn_marker_text(value: &str, model: &AppViewModel) -> Option<String> {
-    let phase = if value == "thinking" {
-        Some("thinking".to_string())
-    } else if let Some(detail) = value.strip_prefix("thinking ") {
-        Some(format!("thinking {detail}"))
-    } else if let Some(detail) = value.strip_prefix("calling ") {
-        Some(format!("calling {detail}"))
+    let thinking_prefix = thinking_prefix();
+    let calling_prefix = calling_prefix();
+    let phase = if value == thinking_prefix.trim_end() {
+        Some(thinking_prefix.trim_end().to_string())
+    } else if let Some(detail) = value.strip_prefix(thinking_prefix) {
+        Some(format!("{thinking_prefix}{detail}"))
+    } else if let Some(detail) = value.strip_prefix(calling_prefix) {
+        Some(format!("{calling_prefix}{detail}"))
     } else {
         significant_turn_state_marker(value)
     }?;
@@ -376,10 +363,10 @@ fn interrupt_hint_with_to(value: &str) -> String {
 }
 
 fn significant_turn_state_marker(value: &str) -> Option<String> {
-    match value {
-        "idle" | "active" => None,
-        value if value.trim().is_empty() => None,
-        value => Some(title_case_status_phrase(value)),
+    if turn_marker_is_suppressed(value) {
+        None
+    } else {
+        Some(title_case_status_phrase(value))
     }
 }
 
@@ -539,13 +526,8 @@ fn tool_body_spans(row: &TranscriptRow, text: &str) -> Vec<Span<'static>> {
     if row.kind != TranscriptItemKind::ToolResultReceived {
         return inline_code_spans(text, payload_style);
     }
-    for (prefix, style) in [
-        ("ok", ui_theme::positive()),
-        ("success", ui_theme::positive()),
-        ("failed", ui_theme::negative_strong()),
-        ("error", ui_theme::negative_strong()),
-        ("refused", ui_theme::negative_strong()),
-    ] {
+    if let Some((prefix, class)) = tool_result_prefix_class(text) {
+        let style = render_classification_style(class);
         if text == prefix {
             return vec![Span::styled(prefix.to_string(), style)];
         }
@@ -570,13 +552,7 @@ fn tool_result_detail_spans(text: &str, normal_style: Style) -> Vec<Span<'static
 
 fn tool_result_summary_spans(summary: &str, normal_style: Style) -> Vec<Span<'static>> {
     let trimmed = summary.trim();
-    let style = match trimmed {
-        "ok" | "success" | "completed" => Some(ui_theme::positive()),
-        "failed" | "failure" | "error" | "refused" | "interrupted" => {
-            Some(ui_theme::negative_strong())
-        }
-        _ => None,
-    };
+    let style = tool_result_summary_class(trimmed).map(render_classification_style);
     style
         .map(|style| vec![Span::styled(summary.to_string(), style)])
         .unwrap_or_else(|| inline_code_spans(summary, normal_style))
@@ -857,7 +833,7 @@ fn diagnostic_body_lines(
     if row.actor != TranscriptActor::AgentTui {
         return None;
     }
-    let rest = source_line.strip_prefix("diagnostic ")?;
+    let rest = source_line.strip_prefix(diagnostic_prefix())?;
     let (severity, detail) = rest.split_once(' ').unwrap_or((rest, ""));
     let severity_style = diagnostic_severity_style(severity);
     let body_width = width.saturating_sub(2).max(1);
@@ -921,7 +897,7 @@ fn carrier_status_body_spans(row: &TranscriptRow, text: &str) -> Option<Vec<Span
     {
         return None;
     }
-    if matches!(text, "completed" | "completed_without_provider") {
+    if terminal_status_is_positive(text) {
         return Some(vec![Span::styled(
             humanize_protocol_token(text),
             ui_theme::positive(),
@@ -1042,11 +1018,11 @@ fn directive_status_body_spans(row: &TranscriptRow, text: &str) -> Option<Vec<Sp
 }
 
 fn diagnostic_severity_style(severity: &str) -> Style {
-    match severity {
-        "warn" | "warning" => ui_theme::warning_count(),
-        "error" | "failed" | "failure" => ui_theme::negative_strong(),
-        "ok" | "success" => ui_theme::positive(),
-        _ => muted_style(),
+    match diagnostic_severity_class(severity) {
+        DiagnosticSeverityClass::Warning => ui_theme::warning_count(),
+        DiagnosticSeverityClass::Negative => ui_theme::negative_strong(),
+        DiagnosticSeverityClass::Positive => ui_theme::positive(),
+        DiagnosticSeverityClass::Muted => muted_style(),
     }
 }
 
@@ -1054,7 +1030,7 @@ fn diagnostic_body_spans(row: &TranscriptRow, text: &str) -> Option<Vec<Span<'st
     if row.actor != TranscriptActor::AgentTui {
         return None;
     }
-    let rest = text.strip_prefix("diagnostic ")?;
+    let rest = text.strip_prefix(diagnostic_prefix())?;
     let (severity, detail) = rest.split_once(' ').unwrap_or((rest, ""));
     let severity_style = diagnostic_severity_style(severity);
     let mut spans = vec![Span::styled(severity.to_string(), severity_style)];
@@ -1403,18 +1379,7 @@ fn is_identifier_list_item(value: &str) -> bool {
 }
 
 fn semantic_status_value_style(value: &str) -> Option<Style> {
-    let normalized = value.trim().to_ascii_lowercase().replace('_', "-");
-    match normalized.as_str() {
-        "ok" | "success" | "succeeded" | "passed" | "ready" | "aligned" | "true" | "yes" => {
-            Some(ui_theme::positive())
-        }
-        "failed" | "failure" | "error" | "refused" | "missing" => Some(ui_theme::negative_strong()),
-        "warning" | "warn" | "blocked" | "partial" | "stale" | "pending" => {
-            Some(ui_theme::warning_count())
-        }
-        "false" | "no" | "none" | "null" => Some(muted_style()),
-        _ => None,
-    }
+    semantic_status_value_class(value).map(render_classification_style)
 }
 
 fn is_technical_value(value: &str) -> bool {
@@ -2336,29 +2301,35 @@ fn status_value_spans(key: &str, raw_value: &str, display_value: &str) -> Vec<Sp
 fn turn_state_value_spans(display_value: &str) -> Option<Vec<Span<'static>>> {
     let parts: Vec<&str> = display_value.split_whitespace().collect();
     match parts.as_slice() {
-        ["thinking", durations @ ..] if !durations.is_empty() && all_duration_tokens(durations) => {
-            Some(phase_with_duration_spans("thinking", durations))
+        [phase, durations @ ..]
+            if *phase == thinking_phase()
+                && turn_state_duration_phase_is_known(phase)
+                && !durations.is_empty()
+                && all_duration_tokens(durations) =>
+        {
+            Some(phase_with_duration_spans(thinking_phase(), durations))
         }
-        ["calling", tool, durations @ ..]
+        [phase, tool, durations @ ..]
             if !durations.is_empty() && all_duration_tokens(durations) =>
         {
+            if *phase != calling_phase() || !turn_state_duration_phase_is_known(phase) {
+                return None;
+            }
             let mut spans = vec![
-                Span::styled("calling".to_string(), ui_theme::positive()),
+                Span::styled(calling_phase().to_string(), ui_theme::positive()),
                 Span::styled(" ".to_string(), muted_style()),
                 Span::styled((*tool).to_string(), code_style()),
             ];
             append_duration_spans(&mut spans, durations);
             Some(spans)
         }
-        ["typing", "operator", mode, count]
-            if operator_activity_mode_style(mode).is_some() && count_is_scan_data(count) =>
+        [action, actor, mode, count]
+            if operator_activity_action_is_known(action)
+                && *actor == operator_activity_actor()
+                && operator_activity_mode_style(mode).is_some()
+                && count_is_scan_data(count) =>
         {
-            Some(operator_activity_status_spans("typing", mode, count))
-        }
-        ["queued", "operator", mode, count]
-            if operator_activity_mode_style(mode).is_some() && count_is_scan_data(count) =>
-        {
-            Some(operator_activity_status_spans("queued", mode, count))
+            Some(operator_activity_status_spans(action, mode, count))
         }
         _ => None,
     }
@@ -2368,7 +2339,10 @@ fn operator_activity_status_spans(action: &str, mode: &str, count: &str) -> Vec<
     vec![
         Span::styled(action.to_string(), ui_theme::positive()),
         Span::styled(" ".to_string(), muted_style()),
-        Span::styled("operator".to_string(), ui_theme::operator_label()),
+        Span::styled(
+            operator_activity_actor().to_string(),
+            ui_theme::operator_label(),
+        ),
         Span::styled(" ".to_string(), muted_style()),
         Span::styled(
             mode.to_string(),
@@ -2558,13 +2532,9 @@ fn status_value_style(key: &str, value: &str) -> Style {
     match key {
         "identity" => ui_theme::agent_label(),
         "turn_state" => {
-            if value == "active"
-                || value.starts_with("active ")
-                || value.starts_with("calling ")
-                || value == "working"
-            {
+            if turn_state_is_positive(value) {
                 ui_theme::positive()
-            } else if value == "failed" || value == "interrupted" {
+            } else if turn_state_is_negative(value) {
                 ui_theme::negative()
             } else {
                 muted_style()
@@ -2605,19 +2575,17 @@ fn status_value_style(key: &str, value: &str) -> Style {
 }
 
 fn runtime_status_style(value: &str) -> Style {
-    if matches!(value, "configured" | "admitted" | "idle" | "working") {
-        ui_theme::positive()
-    } else if value.starts_with("configured_") {
-        ui_theme::warning_count()
-    } else if value.starts_with("refused")
-        || value.starts_with("failed")
-        || value.starts_with("error")
-    {
-        ui_theme::negative_strong()
-    } else if matches!(value, "disabled" | "none") {
-        muted_style()
-    } else {
-        ui_theme::body()
+    runtime_status_class(value)
+        .map(render_classification_style)
+        .unwrap_or_else(ui_theme::body)
+}
+
+fn render_classification_style(class: RenderClassification) -> Style {
+    match class {
+        RenderClassification::Positive => ui_theme::positive(),
+        RenderClassification::Negative => ui_theme::negative_strong(),
+        RenderClassification::Warning => ui_theme::warning_count(),
+        RenderClassification::Muted => muted_style(),
     }
 }
 
@@ -2785,6 +2753,48 @@ mod tests {
         })
     }
 
+    fn transcript_model_with_items(count: usize) -> AppViewModel {
+        let transcript_items = (0..count)
+            .map(|index| TranscriptItem {
+                kind: TranscriptItemKind::InputAdmitted,
+                actor: TranscriptActor::Operator,
+                turn_id: format!("turn_{index}"),
+                text: format!("line {index}"),
+                sequence: None,
+                projection_key: None,
+                occurred_at: Some("2026-05-30T00:00:00.000Z".to_string()),
+            })
+            .collect();
+        build_app_view(&AppViewInput {
+            terminal_size: TerminalSize {
+                width: 80,
+                height: 12,
+            },
+            layout_config: LayoutConfig::default(),
+            transcript_items,
+            status: StatusViewInput {
+                identity: "sonar.resident".to_string(),
+                session: "carrier_1".to_string(),
+                turn_state: TurnState::Idle,
+                active_phase: None,
+                active_turn_age: None,
+                queued_inputs: 0,
+                held_system_directives: 0,
+                oldest_held_age: None,
+                transcript_items: count,
+                runtime_posture: RuntimePostureState::disabled(),
+                last_error: None,
+            },
+            composer: ComposerViewInput {
+                identity: "sonar.resident".to_string(),
+                draft_text: String::new(),
+                turn_state: TurnState::Idle,
+                queued_operator_notes: 0,
+                held_system_directives: 0,
+            },
+        })
+    }
+
     fn active_thinking_model(transcript_items: Vec<TranscriptItem>) -> AppViewModel {
         build_app_view(&AppViewInput {
             terminal_size: TerminalSize {
@@ -2846,6 +2856,13 @@ mod tests {
             line.push_str(buffer[(x, y)].symbol());
         }
         line
+    }
+
+    fn line_text(line: &Line<'static>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
     }
 
     #[test]
@@ -2979,7 +2996,42 @@ mod tests {
     }
 
     #[test]
-    fn scrolled_transcript_view_trims_boundary_separator_rows() {
+    fn transcript_scrollbar_position_tracks_bottom_relative_scroll_offset() {
+        let mut model = transcript_model_with_items(12);
+        let (content_length, viewport_length, bottom_position) =
+            transcript_scroll_position(&model).expect("overflowing transcript has scrollbar");
+
+        assert!(content_length > viewport_length);
+        assert_eq!(bottom_position, content_length - viewport_length);
+
+        model.set_transcript_scroll_offset(3);
+        let (_, _, scrolled_position) =
+            transcript_scroll_position(&model).expect("overflowing transcript has scrollbar");
+
+        assert_eq!(scrolled_position, bottom_position - 3);
+    }
+
+    #[test]
+    fn transcript_view_follows_bottom_as_continuous_lines() {
+        let lines = vec![
+            Line::from("first label"),
+            Line::from(""),
+            Line::from("second label"),
+            Line::from("second body"),
+            Line::from(""),
+            Line::from("third label"),
+        ];
+
+        let visible = visible_scrolled_lines(lines, 3, 0);
+
+        assert_eq!(visible.len(), 3);
+        assert_eq!(line_text(&visible[0]), "second body");
+        assert_eq!(line_text(&visible[1]), "");
+        assert_eq!(line_text(&visible[2]), "third label");
+    }
+
+    #[test]
+    fn transcript_view_scrolls_up_by_exact_line_offset() {
         let lines = vec![
             Line::from("first label"),
             Line::from(""),
@@ -2991,50 +3043,29 @@ mod tests {
 
         let visible = visible_scrolled_lines(lines, 3, 1);
 
-        assert_eq!(visible.len(), 2);
-        assert_eq!(visible[0].spans[0].content.as_ref(), "second label");
-        assert_eq!(visible[1].spans[0].content.as_ref(), "second body");
+        assert_eq!(visible.len(), 3);
+        assert_eq!(line_text(&visible[0]), "second label");
+        assert_eq!(line_text(&visible[1]), "second body");
+        assert_eq!(line_text(&visible[2]), "");
     }
 
     #[test]
-    fn scrolled_transcript_view_uses_marker_when_slice_is_only_separators() {
+    fn transcript_view_clamps_oversized_scroll_to_oldest_lines() {
         let lines = vec![
-            Line::from("first label"),
-            Line::from(""),
-            Line::from(""),
-            Line::from("second label"),
-        ];
-
-        let visible = visible_scrolled_lines(lines, 1, 1);
-
-        assert_eq!(visible.len(), 1);
-        assert_eq!(visible[0].spans[0].content.as_ref(), "  ");
-        assert_eq!(visible[0].spans[0].style.fg, Some(Color::DarkGray));
-        assert_eq!(visible[0].spans[1].content.as_ref(), "...");
-        assert_eq!(visible[0].spans[1].style.fg, Some(Color::DarkGray));
-    }
-
-    #[test]
-    fn oversized_latest_block_tail_keeps_participant_label() {
-        let lines = vec![
-            Line::from(Span::styled("sonar.resident:", agent_label_style())),
+            Line::from("sonar.resident:"),
             Line::from("  first body line"),
             Line::from("  second body line"),
             Line::from("  third body line"),
             Line::from("  2026-05-30Z00:14"),
         ];
 
-        let visible = visible_tail_lines(lines, 4);
+        let visible = visible_scrolled_lines(lines, 4, 999);
 
         assert_eq!(visible.len(), 4);
-        assert_eq!(visible[0].spans[0].content.as_ref(), "sonar.resident:");
-        assert_eq!(
-            visible[0].spans[0].style.fg,
-            Some(ratatui::style::Color::Cyan)
-        );
-        assert_eq!(visible[1].spans[1].content.as_ref(), "...");
-        assert_eq!(visible[2].spans[0].content.as_ref(), "  third body line");
-        assert_eq!(visible[3].spans[0].content.as_ref(), "  2026-05-30Z00:14");
+        assert_eq!(line_text(&visible[0]), "sonar.resident:");
+        assert_eq!(line_text(&visible[1]), "  first body line");
+        assert_eq!(line_text(&visible[2]), "  second body line");
+        assert_eq!(line_text(&visible[3]), "  third body line");
     }
 
     #[test]

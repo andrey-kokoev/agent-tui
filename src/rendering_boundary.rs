@@ -1,9 +1,11 @@
 use crate::carrier_protocol::{
-    PAYLOAD_POLICY_SCHEMA, PAYLOAD_REF_SCHEMA, PayloadPolicy, PayloadRef, SESSION_EVENT_SCHEMA,
-    SessionEvent, SessionEventKind,
+    PayloadPolicy, PayloadRef, SessionEvent, SessionEventKind, payload_policy_schema,
+    payload_ref_schema, session_event_schema,
 };
+use crate::carrier_protocol_contract::{diagnostic_info_level, diagnostic_warning_level};
 use crate::input_queue::SessionEvidenceContext;
 use crate::layout_model::{AgentTuiLayout, LayoutConfig, TerminalSize, compute_layout};
+use crate::operator_routing_contract::payload_reader_tool_name;
 use serde_json::json;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,7 +47,7 @@ pub enum InlinePayloadDecision {
 pub fn provider_stderr_diagnostic(message: impl Into<String>) -> DiagnosticBoundaryRecord {
     DiagnosticBoundaryRecord {
         source: DiagnosticSource::ProviderStderr,
-        level: "warn".to_string(),
+        level: diagnostic_warning_level().to_string(),
         message: message.into(),
         suppression_policy: None,
         suppression_count: None,
@@ -55,7 +57,7 @@ pub fn provider_stderr_diagnostic(message: impl Into<String>) -> DiagnosticBound
 pub fn mcp_stderr_diagnostic(message: impl Into<String>) -> DiagnosticBoundaryRecord {
     DiagnosticBoundaryRecord {
         source: DiagnosticSource::McpStderr,
-        level: "warn".to_string(),
+        level: diagnostic_warning_level().to_string(),
         message: message.into(),
         suppression_policy: None,
         suppression_count: None,
@@ -68,7 +70,7 @@ pub fn known_noise_suppression_diagnostic(
 ) -> DiagnosticBoundaryRecord {
     DiagnosticBoundaryRecord {
         source: DiagnosticSource::KnownNoiseSuppression,
-        level: "info".to_string(),
+        level: diagnostic_info_level().to_string(),
         message: "known noise suppressed before transcript rendering".to_string(),
         suppression_policy: Some(policy.into()),
         suppression_count: Some(suppressed_count),
@@ -96,7 +98,7 @@ pub fn diagnostic_session_event(
     }
 
     SessionEvent {
-        schema: SESSION_EVENT_SCHEMA.to_string(),
+        schema: session_event_schema().to_string(),
         event_kind: SessionEventKind::CarrierDiagnosticRecorded,
         event_id: event_id.into(),
         occurred_at: occurred_at.into(),
@@ -116,7 +118,7 @@ pub fn resize_boundary(
     let layout = compute_layout(next, config);
     let record = DiagnosticBoundaryRecord {
         source: DiagnosticSource::Resize,
-        level: "info".to_string(),
+        level: diagnostic_info_level().to_string(),
         message: format!(
             "terminal resized from {}x{} to {}x{} with composer and transcript state preserved",
             previous.width, previous.height, next.width, next.height
@@ -129,7 +131,7 @@ pub fn resize_boundary(
 
 pub fn default_payload_policy() -> PayloadPolicy {
     PayloadPolicy {
-        schema: PAYLOAD_POLICY_SCHEMA.to_string(),
+        schema: payload_policy_schema().to_string(),
         max_inline_chars: 4000,
         max_inline_bytes: 8000,
         sensitive_payloads_require_ref: true,
@@ -147,9 +149,9 @@ pub fn decide_payload_inline(
     let too_many_bytes = content.len() as u64 > policy.max_inline_bytes;
     if (sensitive && policy.sensitive_payloads_require_ref) || too_many_chars || too_many_bytes {
         InlinePayloadDecision::RequiresRef(PayloadRef {
-            schema: PAYLOAD_REF_SCHEMA.to_string(),
+            schema: payload_ref_schema().to_string(),
             payload_ref: payload_ref_id.into(),
-            reader_tool: "mcp_payload_show".to_string(),
+            reader_tool: payload_reader_tool_name().to_string(),
             summary: summary.into(),
         })
     } else {

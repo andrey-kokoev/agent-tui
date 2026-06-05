@@ -7,6 +7,7 @@ use crate::mcp_runtime_config::McpRuntimeConfig;
 use crate::provider_adapter_admission::ProviderAdapterAdmission;
 use crate::provider_dispatch::ProviderAdapter;
 use crate::provider_runtime_config::ProviderRuntimeConfig;
+use crate::rendering_classifier_contract::{calling_prefix, thinking_prefix};
 use crate::runtime_coordinator::{
     RuntimeCoordinator, RuntimeCoordinatorClock, RuntimeOperatorSubmitResult,
 };
@@ -381,8 +382,8 @@ fn active_tool_call_phase(items: &[TranscriptItem], now: &str) -> Option<String>
         .as_deref()
         .and_then(|started_at| elapsed_label_between(started_at, now));
     Some(match age {
-        Some(age) => format!("calling {tool_name} {age}"),
-        None => format!("calling {tool_name}"),
+        Some(age) => format!("{}{tool_name} {age}", calling_prefix()),
+        None => format!("{}{tool_name}", calling_prefix()),
     })
 }
 
@@ -391,8 +392,8 @@ fn active_provider_phase(turn_state: TurnState, active_turn_age: Option<String>)
         return None;
     }
     Some(match active_turn_age {
-        Some(age) => format!("thinking {age}"),
-        None => "thinking".to_string(),
+        Some(age) => format!("{}{age}", thinking_prefix()),
+        None => thinking_prefix().trim_end().to_string(),
     })
 }
 
@@ -409,7 +410,7 @@ impl From<crate::runtime_step::RuntimeStepClock> for InteractiveStepClock {
 mod tests {
     use super::*;
     use crate::carrier_protocol::{
-        SESSION_EVENT_SCHEMA, SessionEvent, SessionEventKind, parse_session_event,
+        SessionEvent, SessionEventKind, parse_session_event, session_event_schema,
     };
     use crate::mcp_runtime_config::{
         McpRuntimeConfig, mcp_config_env_var, mcp_fabric_env_var, site_mcp_fabric_env_var,
@@ -570,7 +571,7 @@ mod tests {
                 return Ok(ProviderToolCallExecution::default());
             }
             let request = SessionEvent {
-                schema: SESSION_EVENT_SCHEMA.to_string(),
+                schema: session_event_schema().to_string(),
                 event_kind: SessionEventKind::ToolCallRequested,
                 event_id: format!("{}_interactive_tool_request", clock.event_id_prefix),
                 occurred_at: clock.occurred_at.clone(),

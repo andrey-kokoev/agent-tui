@@ -1,6 +1,6 @@
 use crate::carrier_protocol::{
-    ControlInputEvent, DeliveryMode, HoldCondition, InputEvent, SESSION_EVENT_SCHEMA, SessionEvent,
-    SessionEventKind, SourceKind,
+    ControlInputEvent, DeliveryMode, HoldCondition, InputEvent, SessionEvent, SessionEventKind,
+    SourceKind, session_event_schema,
 };
 use serde_json::{Value, json};
 use std::collections::VecDeque;
@@ -360,7 +360,7 @@ fn session_event(
     payload: serde_json::Value,
 ) -> SessionEvent {
     SessionEvent {
-        schema: SESSION_EVENT_SCHEMA.to_string(),
+        schema: session_event_schema().to_string(),
         event_kind: kind,
         event_id: event_id.into(),
         occurred_at: occurred_at.into(),

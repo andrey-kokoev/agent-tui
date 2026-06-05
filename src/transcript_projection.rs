@@ -388,12 +388,12 @@ fn humanize_token(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::carrier_protocol::{SESSION_EVENT_SCHEMA, SessionEvent, parse_session_event};
+    use crate::carrier_protocol::{SessionEvent, parse_session_event, session_event_schema};
     use serde_json::json;
 
     fn event(event_kind: SessionEventKind, payload: serde_json::Value) -> SessionEvent {
         SessionEvent {
-            schema: SESSION_EVENT_SCHEMA.to_string(),
+            schema: session_event_schema().to_string(),
             event_kind,
             event_id: "session_event_projection_1".to_string(),
             occurred_at: "2026-05-30T00:00:00.000Z".to_string(),

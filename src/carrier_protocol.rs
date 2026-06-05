@@ -1,16 +1,16 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-pub const INPUT_EVENT_SCHEMA: &str = "narada.carrier.input_event.v1";
-pub const CONTROL_INPUT_EVENT_SCHEMA: &str = "narada.carrier.control.input_event.v1";
-pub const SESSION_EVENT_SCHEMA: &str = "narada.carrier.session_event.v1";
-pub const PAYLOAD_REF_SCHEMA: &str = "narada.carrier.payload_ref.v1";
-pub const PAYLOAD_POLICY_SCHEMA: &str = "narada.carrier.payload_policy.v1";
-pub const PROVIDER_REQUEST_PAYLOAD_SCHEMA: &str = "narada.agent_tui.provider_request_payload.v0";
-pub const PROVIDER_OUTPUT_PAYLOAD_SCHEMA: &str = "narada.agent_tui.provider_output_payload.v0";
-pub const TURN_TERMINAL_PAYLOAD_SCHEMA: &str = "narada.agent_tui.turn_terminal_payload.v0";
-pub const SESSION_EVENT_FIXTURE_MANIFEST_SCHEMA: &str =
-    "narada.carrier.session_event_fixture_manifest.v1";
+pub use crate::carrier_protocol_contract::{
+    completed_turn_terminal_status_is_valid, control_event_id_prefix, control_input_event_schema,
+    delivery_mode_is_valid, diagnostic_level_is_valid, failed_turn_terminal_status_is_valid,
+    input_event_id_prefix, input_event_schema, interrupted_turn_terminal_status_is_valid,
+    payload_policy_schema, payload_ref_schema, provider_output_payload_schema,
+    provider_request_payload_schema, session_event_fixture_manifest_schema,
+    session_event_id_prefix, session_event_schema, terminal_state_is_valid,
+    turn_terminal_payload_schema,
+};
+use crate::operator_routing_contract::{output_reader_tool_name, payload_reader_tools};
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -206,10 +206,10 @@ pub fn serialize_session_event(event: &SessionEvent) -> Result<String, String> {
 }
 
 fn validate_input_event(event: &InputEvent) -> Result<(), String> {
-    if event.schema != INPUT_EVENT_SCHEMA {
+    if event.schema != input_event_schema() {
         return Err(format!("invalid_schema:{}", event.schema));
     }
-    require_prefix("event_id", &event.event_id, "input_")?;
+    require_prefix("event_id", &event.event_id, input_event_id_prefix())?;
     require_nonempty("source_id", &event.source_id)?;
     require_rfc3339_utc("created_at", &event.created_at)?;
     if !event.metadata.is_object() {
@@ -248,11 +248,19 @@ fn validate_input_event(event: &InputEvent) -> Result<(), String> {
 }
 
 fn validate_control_input_event(event: &ControlInputEvent) -> Result<(), String> {
-    if event.schema != CONTROL_INPUT_EVENT_SCHEMA {
+    if event.schema != control_input_event_schema() {
         return Err(format!("invalid_schema:{}", event.schema));
     }
-    require_prefix("control_event_id", &event.control_event_id, "control_")?;
-    require_prefix("input_event_id", &event.input_event_id, "input_")?;
+    require_prefix(
+        "control_event_id",
+        &event.control_event_id,
+        control_event_id_prefix(),
+    )?;
+    require_prefix(
+        "input_event_id",
+        &event.input_event_id,
+        input_event_id_prefix(),
+    )?;
     require_rfc3339_utc("written_at", &event.written_at)?;
     validate_input_event(&event.input)?;
     if event.input_event_id != event.input.event_id {
@@ -262,10 +270,10 @@ fn validate_control_input_event(event: &ControlInputEvent) -> Result<(), String>
 }
 
 fn validate_session_event(event: &SessionEvent) -> Result<(), String> {
-    if event.schema != SESSION_EVENT_SCHEMA {
+    if event.schema != session_event_schema() {
         return Err(format!("invalid_schema:{}", event.schema));
     }
-    require_prefix("event_id", &event.event_id, "session_event_")?;
+    require_prefix("event_id", &event.event_id, session_event_id_prefix())?;
     require_rfc3339_utc("occurred_at", &event.occurred_at)?;
     require_nonempty("carrier_session_id", &event.carrier_session_id)?;
     require_nonempty("agent_id", &event.agent_id)?;
@@ -294,7 +302,7 @@ pub fn create_provider_request_payload(
     content_preview: &str,
 ) -> Value {
     json!({
-        "schema": PROVIDER_REQUEST_PAYLOAD_SCHEMA,
+        "schema": provider_request_payload_schema(),
         "turn_id": turn_id,
         "input_event_id": input_event_id,
         "provider_request_status": provider_request_status,
@@ -319,7 +327,7 @@ pub fn create_provider_text_delta_payload(
     text_delta_ref: Value,
 ) -> Value {
     json!({
-        "schema": PROVIDER_OUTPUT_PAYLOAD_SCHEMA,
+        "schema": provider_output_payload_schema(),
         "turn_id": turn_id,
         "provider_output_kind": "text_delta",
         "sequence": sequence,
@@ -336,7 +344,7 @@ pub fn create_provider_tool_call_payload(
     arguments_ref: Value,
 ) -> Value {
     json!({
-        "schema": PROVIDER_OUTPUT_PAYLOAD_SCHEMA,
+        "schema": provider_output_payload_schema(),
         "turn_id": turn_id,
         "provider_output_kind": "tool_call_request",
         "sequence": sequence,
@@ -355,7 +363,7 @@ pub fn create_turn_terminal_payload(
     error_summary: Option<&str>,
 ) -> Value {
     let mut payload = json!({
-        "schema": TURN_TERMINAL_PAYLOAD_SCHEMA,
+        "schema": turn_terminal_payload_schema(),
         "turn_id": turn_id,
         "provider_request_status": provider_request_status,
         "terminal_status": terminal_status,
@@ -433,7 +441,7 @@ fn validate_provider_request_payload(payload: &Value) -> Result<(), String> {
             "content_preview",
         ],
     )?;
-    if payload.get("schema").and_then(Value::as_str) != Some(PROVIDER_REQUEST_PAYLOAD_SCHEMA) {
+    if payload.get("schema").and_then(Value::as_str) != Some(provider_request_payload_schema()) {
         return Err(format!(
             "payload.invalid_schema:{}",
             payload_value_string(payload, "schema")
@@ -471,7 +479,7 @@ fn validate_provider_output_payload(expected_kind: &str, payload: &Value) -> Res
         payload,
         &["schema", "turn_id", "provider_output_kind", "sequence"],
     )?;
-    if payload.get("schema").and_then(Value::as_str) != Some(PROVIDER_OUTPUT_PAYLOAD_SCHEMA) {
+    if payload.get("schema").and_then(Value::as_str) != Some(provider_output_payload_schema()) {
         return Err(format!(
             "payload.invalid_schema:{}",
             payload_value_string(payload, "schema")
@@ -555,7 +563,7 @@ fn validate_tool_result_payload(payload: &Value) -> Result<(), String> {
 fn validate_carrier_diagnostic_payload(payload: &Value) -> Result<(), String> {
     require_payload_fields(payload, &["level", "message"])?;
     match payload.get("level").and_then(Value::as_str) {
-        Some("debug" | "info" | "warn" | "error") => {}
+        Some(level) if diagnostic_level_is_valid(level) => {}
         _ => {
             return Err(format!(
                 "payload.invalid_level:{}",
@@ -597,7 +605,7 @@ fn validate_turn_terminal_payload(kind: &SessionEventKind, payload: &Value) -> R
             "provider_execution_enabled",
         ],
     )?;
-    if payload.get("schema").and_then(Value::as_str) != Some(TURN_TERMINAL_PAYLOAD_SCHEMA) {
+    if payload.get("schema").and_then(Value::as_str) != Some(turn_terminal_payload_schema()) {
         return Err(format!(
             "payload.invalid_schema:{}",
             payload_value_string(payload, "schema")
@@ -609,13 +617,21 @@ fn validate_turn_terminal_payload(kind: &SessionEventKind, payload: &Value) -> R
         Some(Value::Bool(_)) => {}
         _ => return Err("payload.invalid_provider_execution_enabled".to_string()),
     }
-    match (kind, payload.get("terminal_status").and_then(Value::as_str)) {
-        (
-            SessionEventKind::TurnCompleted,
-            Some("completed" | "completed_after_dispatch" | "completed_without_provider"),
-        ) => Ok(()),
-        (SessionEventKind::TurnInterrupted, Some("interrupted")) => Ok(()),
-        (SessionEventKind::TurnFailed, Some("failed")) => {
+    let terminal_status = payload.get("terminal_status").and_then(Value::as_str);
+    match (kind, terminal_status) {
+        (SessionEventKind::TurnCompleted, Some(status))
+            if completed_turn_terminal_status_is_valid(status) =>
+        {
+            Ok(())
+        }
+        (SessionEventKind::TurnInterrupted, Some(status))
+            if interrupted_turn_terminal_status_is_valid(status) =>
+        {
+            Ok(())
+        }
+        (SessionEventKind::TurnFailed, Some(status))
+            if failed_turn_terminal_status_is_valid(status) =>
+        {
             require_payload_nonempty_string(payload, "error_summary")
         }
         _ => Err(format!(
@@ -672,14 +688,14 @@ fn require_payload_rfc3339(payload: &Value, field: &str) -> Result<(), String> {
 
 fn require_delivery_mode(payload: &Value, field: &str) -> Result<(), String> {
     match payload.get(field).and_then(Value::as_str) {
-        Some("admit_for_current_turn" | "admit_after_active_turn") => Ok(()),
+        Some(value) if delivery_mode_is_valid(value) => Ok(()),
         _ => Err(format!("payload.invalid_{field}")),
     }
 }
 
 fn require_terminal_state(payload: &Value, field: &str) -> Result<(), String> {
     match payload.get(field).and_then(Value::as_str) {
-        Some("completed" | "interrupted" | "failed") => Ok(()),
+        Some(value) if terminal_state_is_valid(value) => Ok(()),
         _ => Err(format!("payload.invalid_{field}")),
     }
 }
@@ -719,16 +735,17 @@ fn payload_value_string(payload: &Value, field: &str) -> String {
 }
 
 fn validate_payload_ref(payload_ref: &PayloadRef) -> Result<(), String> {
-    if payload_ref.schema != PAYLOAD_REF_SCHEMA {
+    if payload_ref.schema != payload_ref_schema() {
         return Err(format!("invalid_schema:{}", payload_ref.schema));
     }
     if !is_valid_payload_ref(&payload_ref.payload_ref) {
         return Err("invalid_payload_ref".to_string());
     }
-    if payload_ref.reader_tool != "mcp_payload_read"
-        && payload_ref.reader_tool != "mcp_payload_show"
-        && payload_ref.reader_tool != "mcp_output_show"
-    {
+    let valid_reader_tool = payload_reader_tools()
+        .iter()
+        .any(|tool| tool == &payload_ref.reader_tool)
+        || payload_ref.reader_tool == output_reader_tool_name();
+    if !valid_reader_tool {
         return Err(format!("invalid_reader_tool:{}", payload_ref.reader_tool));
     }
     require_nonempty("summary", &payload_ref.summary)?;
@@ -736,7 +753,7 @@ fn validate_payload_ref(payload_ref: &PayloadRef) -> Result<(), String> {
 }
 
 fn validate_payload_policy(policy: &PayloadPolicy) -> Result<(), String> {
-    if policy.schema != PAYLOAD_POLICY_SCHEMA {
+    if policy.schema != payload_policy_schema() {
         return Err(format!("invalid_schema:{}", policy.schema));
     }
     Ok(())
@@ -746,7 +763,7 @@ pub fn validate_session_event_fixture_manifest_errors(
     manifest: &SessionEventFixtureManifest,
 ) -> Vec<String> {
     let mut errors = Vec::new();
-    if manifest.schema != SESSION_EVENT_FIXTURE_MANIFEST_SCHEMA {
+    if manifest.schema != session_event_fixture_manifest_schema() {
         errors.push(format!("invalid_schema:{}", manifest.schema));
     }
     let protocol_kinds = SESSION_EVENT_KINDS
@@ -919,7 +936,7 @@ mod tests {
     #[test]
     fn rejects_invalid_shared_session_event_fixture_manifest() {
         let invalid_kind = SessionEventFixtureManifest {
-            schema: SESSION_EVENT_FIXTURE_MANIFEST_SCHEMA.to_string(),
+            schema: session_event_fixture_manifest_schema().to_string(),
             fixtures: vec![SessionEventFixtureManifestEntry {
                 event_kind: "missing".to_string(),
                 fixture: "x.json".to_string(),
@@ -941,7 +958,7 @@ mod tests {
         );
 
         let invalid_fixture = SessionEventFixtureManifest {
-            schema: SESSION_EVENT_FIXTURE_MANIFEST_SCHEMA.to_string(),
+            schema: session_event_fixture_manifest_schema().to_string(),
             fixtures: SESSION_EVENT_KINDS
                 .iter()
                 .enumerate()
@@ -1418,7 +1435,7 @@ mod tests {
             validate_session_payload(
                 &SessionEventKind::TurnCompleted,
                 &json!({
-                    "schema": TURN_TERMINAL_PAYLOAD_SCHEMA,
+                    "schema": turn_terminal_payload_schema(),
                     "turn_id": "turn_1",
                     "terminal_status": "failed",
                     "provider_request_status": "recorded_not_dispatched",
