@@ -35,6 +35,7 @@ pub struct McpFabricPreparedToolCall {
     pub command: String,
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
+    pub output_store_site_root: String,
     pub tool_name: String,
     pub request_event: SessionEvent,
     pub json_rpc: McpJsonRpcExchange,
@@ -142,6 +143,7 @@ impl McpFabricTransportClient {
     ) -> Result<McpFabricPreparedToolCall, String> {
         boundary.assert_tool_access(&request.tool_name)?;
         let server = self.resolve_tool(&request.tool_name)?;
+        let output_store_site_root = materialize_output_store_site_root(server, context)?;
         let request_event = boundary.tool_request_event(request, context, event_id, occurred_at)?;
         let json_rpc = McpJsonRpcExchange::for_tool_call(json_rpc_id, request, arguments)?;
         Ok(McpFabricPreparedToolCall {
@@ -152,7 +154,8 @@ impl McpFabricTransportClient {
                 .iter()
                 .map(|arg| substitute_runtime_tokens(arg, context))
                 .collect(),
-            env: materialize_server_env(server, context),
+            env: materialize_server_env(server, context, &output_store_site_root)?,
+            output_store_site_root,
             tool_name: request.tool_name.clone(),
             request_event,
             json_rpc,
@@ -275,7 +278,8 @@ fn select_args(server_name: &str, args: Option<Value>) -> Result<Vec<String>, St
 fn materialize_server_env(
     server: &McpFabricTransportServer,
     context: &SessionEvidenceContext,
-) -> BTreeMap<String, String> {
+    output_store_site_root: &str,
+) -> Result<BTreeMap<String, String>, String> {
     let mut env = BTreeMap::new();
     for name in &server.env_vars {
         if let Ok(value) = std::env::var(name) {
@@ -288,7 +292,33 @@ fn materialize_server_env(
             .iter()
             .map(|(name, value)| (name.clone(), substitute_runtime_tokens(value, context))),
     );
-    env
+    if let Some(configured_site_root) = env.get("NARADA_SITE_ROOT") {
+        if configured_site_root != output_store_site_root {
+            return Err(format!(
+                "mcp_fabric_server_site_root_mismatch:{}:{}:{}",
+                server.name, configured_site_root, output_store_site_root
+            ));
+        }
+    } else {
+        env.insert(
+            "NARADA_SITE_ROOT".to_string(),
+            output_store_site_root.to_string(),
+        );
+    }
+    Ok(env)
+}
+
+fn materialize_output_store_site_root(
+    server: &McpFabricTransportServer,
+    context: &SessionEvidenceContext,
+) -> Result<String, String> {
+    let Some(target_site_root) = &server.target_site_root else {
+        return Err(format!(
+            "mcp_fabric_server_target_site_root_missing:{}",
+            server.name
+        ));
+    };
+    Ok(substitute_runtime_tokens(target_site_root, context))
 }
 
 fn substitute_runtime_tokens(value: &str, context: &SessionEvidenceContext) -> String {
@@ -1225,6 +1255,7 @@ mod tests {
                   "command": "node",
                   "env": {"PATH": "explicit-path", "NARADA_SITE_ROOT": "{site_root}"},
                   "env_vars": ["PATH"],
+                  "target_site_root": "{site_root}",
                   "tools": ["site_loop_status"]
                 }
               }
@@ -1269,6 +1300,7 @@ mod tests {
                   "transport": "stdio",
                   "command": "{site_root}/bin/node-shim",
                   "args": ["{site_root}/tools/site-loop.mjs", "--site-root", "{site_root}"],
+                  "target_site_root": "{site_root}",
                   "tools": ["site_loop_status"]
                 }
               }
@@ -1297,6 +1329,7 @@ mod tests {
             .expect("tool call prepared");
 
         assert_eq!(call.command, "D:/code/narada.sonar/bin/node-shim");
+        assert_eq!(call.output_store_site_root, "D:/code/narada.sonar");
         assert_eq!(
             call.args,
             vec![
@@ -1335,6 +1368,7 @@ mod tests {
         assert_eq!(call.server_name, "sonar-site-loop");
         assert_eq!(call.command, "node");
         assert_eq!(call.args, vec!["site-loop.mjs".to_string()]);
+        assert_eq!(call.output_store_site_root, "D:/code/narada.sonar");
         assert_eq!(
             call.env.get("NARADA_SITE_ROOT"),
             Some(&"D:/code/narada.sonar".to_string())
@@ -1345,6 +1379,94 @@ mod tests {
         assert_eq!(
             call.request_event.event_kind,
             SessionEventKind::ToolCallRequested
+        );
+    }
+
+    #[test]
+    fn prepare_tool_call_requires_target_site_root() {
+        let client = McpFabricTransportClient::from_json_str(
+            "fixture.mcp.json",
+            r#"{
+              "mcpServers": {
+                "sonar-site-loop": {
+                  "transport": "stdio",
+                  "command": "node",
+                  "tools": ["site_loop_status"]
+                }
+              }
+            }"#,
+        )
+        .expect("config parses before admission");
+        let boundary = client.admitted_boundary(
+            "D:/code/narada.sonar/.ai/mcp",
+            "fixture.mcp.json:mcpServers",
+        );
+
+        let error = client
+            .prepare_tool_call(
+                &boundary,
+                &McpToolRequest {
+                    tool_name: "site_loop_status".to_string(),
+                    arguments_summary: "{}".to_string(),
+                    arguments_ref: None,
+                    requesting_agent_id: "sonar.resident".to_string(),
+                },
+                serde_json::json!({}),
+                7,
+                &context(),
+                "session_event_tool_request_1",
+                "2026-05-30T00:00:00.000Z",
+            )
+            .expect_err("target site root is required at prepare time");
+
+        assert_eq!(
+            error,
+            "mcp_fabric_server_target_site_root_missing:sonar-site-loop"
+        );
+    }
+
+    #[test]
+    fn prepare_tool_call_rejects_mismatched_env_site_root() {
+        let client = McpFabricTransportClient::from_json_str(
+            "fixture.mcp.json",
+            r#"{
+              "mcpServers": {
+                "sonar-site-loop": {
+                  "transport": "stdio",
+                  "command": "node",
+                  "env": {"NARADA_SITE_ROOT": "D:/wrong/site"},
+                  "target_site_root": "{site_root}",
+                  "tools": ["site_loop_status"]
+                }
+              }
+            }"#,
+        )
+        .expect("config parses before admission");
+        let boundary = client.admitted_boundary(
+            "D:/code/narada.sonar/.ai/mcp",
+            "fixture.mcp.json:mcpServers",
+        );
+
+        let error = client
+            .prepare_tool_call(
+                &boundary,
+                &McpToolRequest {
+                    tool_name: "site_loop_status".to_string(),
+                    arguments_summary: "{}".to_string(),
+                    arguments_ref: None,
+                    requesting_agent_id: "sonar.resident".to_string(),
+                },
+                serde_json::json!({}),
+                7,
+                &context(),
+                "session_event_tool_request_1",
+                "2026-05-30T00:00:00.000Z",
+            )
+            .expect_err("env site root must match output store site root");
+
+        assert_eq!(
+            error,
+            "mcp_fabric_server_site_root_mismatch:sonar-site-loop:D:/wrong/site:D:/code/narada.sonar"
         );
     }
 

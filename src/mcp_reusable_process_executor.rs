@@ -294,9 +294,7 @@ impl ReusableMcpProcess {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        if let Some(site_root) = prepared.env.get("NARADA_SITE_ROOT") {
-            command.current_dir(std::path::Path::new(site_root));
-        }
+        command.current_dir(std::path::Path::new(&prepared.output_store_site_root));
         let mut child = command.spawn().map_err(|error| {
             format!(
                 "mcp_reusable_process_spawn_failed:{}:{error}",
@@ -365,6 +363,7 @@ mod tests {
             command: command.to_string(),
             args,
             env: std::collections::BTreeMap::new(),
+            output_store_site_root: "D:/code/narada.sonar".to_string(),
             tool_name: "site_loop_run_once".to_string(),
             request_event: SessionEvent {
                 schema: SESSION_EVENT_SCHEMA.to_string(),
@@ -522,6 +521,7 @@ process.stdin.on('data', chunk => {
             "NARADA_SITE_ROOT".to_string(),
             site_root.display().to_string(),
         );
+        prepared.output_store_site_root = site_root.display().to_string();
         let mut executor = ReusableMcpProcessExecutor::default();
 
         let result = executor

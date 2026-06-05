@@ -377,6 +377,7 @@ fn mcp_fabric_client(scenario: ToolScenario) -> McpFabricTransportClient {
                 "transport": "stdio",
                 "command": "node",
                 "args": ["fake-mcp-server.mjs"],
+                "target_site_root": "{site_root}",
                 "tools": [scenario.tool_name]
             }
         }

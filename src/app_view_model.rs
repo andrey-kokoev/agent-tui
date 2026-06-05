@@ -39,7 +39,9 @@ impl AppViewModel {
                 value: offset.to_string(),
             });
         }
-        self.status.compact_line = compact_status_line(&self.status.segments);
+        let compact_line = compact_status_line(&self.status.segments);
+        self.status.diagnostic_compact_line = compact_line.clone();
+        self.status.compact_line = compact_line;
     }
 }
 
@@ -67,7 +69,9 @@ fn build_app_view_from_rows(
         "transcript_items",
         &transcript_rows.len().to_string(),
     );
-    status.compact_line = compact_status_line(&status.segments);
+    let compact_line = compact_status_line(&status.segments);
+    status.diagnostic_compact_line = compact_line.clone();
+    status.compact_line = compact_line;
 
     AppViewModel {
         layout: compute_layout(input.terminal_size, input.layout_config),
@@ -159,6 +163,11 @@ mod tests {
             model.status.compact_line,
             "session carrier_1 | transcript 1"
         );
+        assert_eq!(
+            model.status.diagnostic_compact_line,
+            model.status.compact_line
+        );
+        assert_eq!(model.status.rendered_line, "");
         assert_eq!(model.composer.prompt_label, "operator -> sonar.resident>");
     }
 

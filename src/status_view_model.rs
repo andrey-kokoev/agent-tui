@@ -177,6 +177,8 @@ pub struct StatusSegment {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusViewModel {
     pub segments: Vec<StatusSegment>,
+    pub diagnostic_compact_line: String,
+    pub rendered_line: String,
     pub compact_line: String,
 }
 
@@ -234,7 +236,7 @@ pub fn build_status_view(input: &StatusViewInput) -> StatusViewModel {
             input.last_error.as_deref().unwrap_or("none"),
         ),
     ]);
-    let compact_line = segments
+    let diagnostic_compact_line = segments
         .iter()
         .filter(|segment| status_segment_is_visible(segment))
         .filter(|segment| segment.key != "identity")
@@ -244,7 +246,9 @@ pub fn build_status_view(input: &StatusViewInput) -> StatusViewModel {
 
     StatusViewModel {
         segments,
-        compact_line,
+        diagnostic_compact_line: diagnostic_compact_line.clone(),
+        rendered_line: String::new(),
+        compact_line: diagnostic_compact_line,
     }
 }
 

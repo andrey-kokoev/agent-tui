@@ -2195,11 +2195,10 @@ fn preferred_split_byte_index(value: &str, width: usize) -> usize {
 }
 
 fn status_paragraph(model: &AppViewModel) -> Paragraph<'_> {
-    let width = model.layout.status.width as usize;
-    let _ = status_spans(&status_segments_with_scroll(model), width);
-    Paragraph::new(Line::from(""))
+    Paragraph::new(Line::from(model.status.rendered_line.as_str()))
 }
 
+#[allow(dead_code)]
 fn status_segments_with_scroll(model: &AppViewModel) -> Vec<StatusSegment> {
     let mut segments = model.status.segments.clone();
     if model.transcript_scroll_offset > 0
@@ -2216,6 +2215,7 @@ fn status_segments_with_scroll(model: &AppViewModel) -> Vec<StatusSegment> {
     segments
 }
 
+#[allow(dead_code)]
 fn status_spans(segments: &[StatusSegment], width: usize) -> Vec<Span<'static>> {
     let ordered = prioritized_status_segments(segments);
     let mut spans = Vec::new();

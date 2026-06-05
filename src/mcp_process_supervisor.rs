@@ -196,6 +196,7 @@ mod tests {
             command: "node".to_string(),
             args: vec!["site-loop.mjs".to_string()],
             env: std::collections::BTreeMap::new(),
+            output_store_site_root: "D:/code/narada.sonar".to_string(),
             tool_name: "site_loop_run_once".to_string(),
             request_event: SessionEvent {
                 schema: crate::carrier_protocol::SESSION_EVENT_SCHEMA.to_string(),

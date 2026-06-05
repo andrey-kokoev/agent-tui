@@ -351,6 +351,7 @@ mod tests {
                   "transport":"stdio",
                   "command":"node",
                   "args":["site-loop.mjs"],
+                  "target_site_root":"{site_root}",
                   "tools":["site_loop_run_once"]
                 }
               }
@@ -471,6 +472,7 @@ mod tests {
                   "transport":"stdio",
                   "command":"node",
                   "args":["site-loop.mjs"],
+                  "target_site_root":"{site_root}",
                   "tools":["site_loop_run_once"]
                 }
               }
@@ -684,6 +686,7 @@ mod tests {
                   "transport":"stdio",
                   "command":"node",
                   "args":["agent-context.mjs"],
+                  "target_site_root":"{site_root}",
                   "tools":["agent_context_startup_sequence","mcp_output_show"]
                 }
               }
@@ -733,6 +736,7 @@ mod tests {
                   "transport":"stdio",
                   "command":"node",
                   "args":["agent-context.mjs"],
+                  "target_site_root":"{site_root}",
                   "tools":["agent_context_startup_sequence","mcp_output_show"]
                 }
               }

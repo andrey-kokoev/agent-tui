@@ -74,9 +74,7 @@ pub fn execute_prepared_tool_call_once(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if let Some(site_root) = prepared.env.get("NARADA_SITE_ROOT") {
-        command.current_dir(Path::new(site_root));
-    }
+    command.current_dir(Path::new(&prepared.output_store_site_root));
     let mut child = command
         .spawn()
         .map_err(|error| format!("mcp_stdio_spawn_failed:{}:{error}", prepared.server_name))?;
@@ -122,11 +120,16 @@ mod tests {
         args: Vec<String>,
         env: BTreeMap<String, String>,
     ) -> McpFabricPreparedToolCall {
+        let output_store_site_root = env
+            .get("NARADA_SITE_ROOT")
+            .cloned()
+            .unwrap_or_else(|| "D:/code/narada.sonar".to_string());
         McpFabricPreparedToolCall {
             server_name: "sonar-site-loop".to_string(),
             command: command.to_string(),
             args,
             env,
+            output_store_site_root,
             tool_name: "site_loop_run_once".to_string(),
             request_event: SessionEvent {
                 schema: SESSION_EVENT_SCHEMA.to_string(),
