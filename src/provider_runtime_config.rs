@@ -32,6 +32,8 @@ pub struct ProviderRuntimeConfig {
     pub provider: Option<String>,
     pub model: Option<String>,
     pub thinking: Option<String>,
+    pub goal: Option<String>,
+    pub goal_status: String,
     pub stream: bool,
     pub refusal_reason: Option<String>,
 }
@@ -43,6 +45,8 @@ impl ProviderRuntimeConfig {
             provider: None,
             model: None,
             thinking: None,
+            goal: None,
+            goal_status: "unset".to_string(),
             stream: false,
             refusal_reason: None,
         }
@@ -78,6 +82,8 @@ impl ProviderRuntimeConfig {
             provider: Some(provider),
             model: Some(model),
             thinking,
+            goal: None,
+            goal_status: "unset".to_string(),
             stream,
             refusal_reason: None,
         }
@@ -89,6 +95,8 @@ impl ProviderRuntimeConfig {
             provider: None,
             model: None,
             thinking: None,
+            goal: None,
+            goal_status: "unset".to_string(),
             stream: false,
             refusal_reason: Some(reason.into()),
         }

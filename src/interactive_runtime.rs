@@ -296,6 +296,15 @@ impl AgentTuiInteractiveRuntime {
             RuntimeOperatorSubmitResult::ThinkingChanged { value } => {
                 self.turns.set_provider_thinking(Some(value.clone()));
             }
+            RuntimeOperatorSubmitResult::GoalChanged { goal }
+            | RuntimeOperatorSubmitResult::GoalPaused { goal }
+            | RuntimeOperatorSubmitResult::GoalResumed { goal } => {
+                self.turns
+                    .set_provider_goal(goal.value.clone(), goal.status.clone());
+            }
+            RuntimeOperatorSubmitResult::GoalCleared => {
+                self.turns.set_provider_goal(None, "unset".to_string());
+            }
             _ => {}
         }
         Ok(())
@@ -498,7 +507,7 @@ mod tests {
     }
 
     #[test]
-    fn slash_model_and_thinking_apply_to_later_provider_turn() {
+    fn slash_model_thinking_and_goal_apply_to_later_provider_turn() {
         let control_path = temp_path("control");
         let session_path = temp_path("session");
         append(&control_path, "");
@@ -530,6 +539,13 @@ mod tests {
         runtime
             .apply_operator_submit_result(&thinking_result)
             .expect("thinking command applied");
+        let goal_result = runtime
+            .coordinator_mut()
+            .handle_operator_submit("/goal finish parity".to_string(), &clock.input)
+            .expect("goal command handled");
+        runtime
+            .apply_operator_submit_result(&goal_result)
+            .expect("goal command applied");
         runtime
             .coordinator_mut()
             .handle_operator_submit("run startup sequence".to_string(), &clock.input)
@@ -552,6 +568,8 @@ mod tests {
             .expect("provider request recorded");
         assert_eq!(provider_request.payload["model"], "gpt-5.5-mini");
         assert_eq!(provider_request.payload["thinking"], "high");
+        assert_eq!(provider_request.payload["goal"], "finish parity");
+        assert_eq!(provider_request.payload["goal_status"], "active");
 
         remove_file(control_path).ok();
         remove_file(session_path).ok();

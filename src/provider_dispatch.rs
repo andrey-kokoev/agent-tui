@@ -59,6 +59,8 @@ pub struct ProviderAdapterRequest {
     pub provider: Option<String>,
     pub model: Option<String>,
     pub thinking: Option<String>,
+    pub goal: Option<String>,
+    pub goal_status: String,
     pub stream: bool,
 }
 
@@ -121,6 +123,8 @@ pub trait ProviderAdapter: Send {
     fn set_session_model(&mut self, _model: Option<String>) {}
 
     fn set_session_thinking(&mut self, _thinking: Option<String>) {}
+
+    fn set_session_goal(&mut self, _goal: Option<String>, _status: String) {}
 
     fn dispatch_request(
         &self,
@@ -202,6 +206,8 @@ impl ProviderAdapterRequest {
             provider: runtime_config.provider.clone(),
             model: runtime_config.model.clone(),
             thinking: runtime_config.thinking.clone(),
+            goal: runtime_config.goal.clone(),
+            goal_status: runtime_config.goal_status.clone(),
             stream: runtime_config.stream,
         }
     }
@@ -211,7 +217,7 @@ impl ProviderAdapterRequest {
         status: &ProviderDispatchStatus,
         adapter_admission: &ProviderAdapterAdmission,
     ) -> Value {
-        create_provider_request_payload(
+        let mut payload = create_provider_request_payload(
             &self.turn_id,
             &self.input_event_id,
             status.as_str(),
@@ -226,8 +232,28 @@ impl ProviderAdapterRequest {
             provider_streaming_contract(adapter_admission.provider_execution_enabled, self.stream),
             adapter_admission.refusal_reason.clone(),
             &self.content_preview,
-        )
+        );
+        payload["goal"] = json!(self.goal);
+        payload["goal_status"] = json!(self.goal_status);
+        payload
     }
+}
+
+fn set_runtime_session_goal(
+    runtime_config: &mut ProviderRuntimeConfig,
+    goal: Option<String>,
+    status: String,
+) {
+    runtime_config.goal = goal.filter(|value| !value.trim().is_empty());
+    runtime_config.goal_status = if runtime_config.goal.is_some() {
+        match status.as_str() {
+            "paused" => "paused".to_string(),
+            "active" => "active".to_string(),
+            _ => "active".to_string(),
+        }
+    } else {
+        "unset".to_string()
+    };
 }
 
 fn provider_streaming_contract(provider_execution_enabled: bool, stream: bool) -> &'static str {
@@ -349,6 +375,10 @@ impl ProviderAdapter for ScriptedProviderAdapter {
             refresh_adapter_admission(&self.runtime_config, &self.adapter_admission);
     }
 
+    fn set_session_goal(&mut self, goal: Option<String>, status: String) {
+        set_runtime_session_goal(&mut self.runtime_config, goal, status);
+    }
+
     fn dispatch_request(
         &self,
         input: &InputEvent,
@@ -441,6 +471,10 @@ impl ProviderAdapter for ProviderDispatchStub {
             refresh_adapter_admission(&self.runtime_config, &self.adapter_admission);
     }
 
+    fn set_session_goal(&mut self, goal: Option<String>, status: String) {
+        set_runtime_session_goal(&mut self.runtime_config, goal, status);
+    }
+
     fn dispatch_request(
         &self,
         input: &InputEvent,
@@ -470,6 +504,10 @@ impl ProviderAdapter for CodexSubscriptionProviderAdapter {
         self.runtime_config.thinking = thinking;
         self.adapter_admission =
             refresh_adapter_admission(&self.runtime_config, &self.adapter_admission);
+    }
+
+    fn set_session_goal(&mut self, goal: Option<String>, status: String) {
+        set_runtime_session_goal(&mut self.runtime_config, goal, status);
     }
 
     fn dispatch_start_record(
@@ -653,7 +691,7 @@ fn run_codex_subscription_request(
     cancellation: &ProviderCancellationToken,
     sink: &mut dyn ProviderOutputSink,
 ) -> ProviderExecutionResult {
-    let prompt = request.content_preview.clone();
+    let prompt = prompt_with_carrier_goal(request);
     if prompt.trim().is_empty() {
         return ProviderExecutionResult::Failed("codex_subscription_prompt_missing".to_string());
     }
@@ -790,6 +828,24 @@ fn run_codex_subscription_request(
         &content,
         1,
     )])
+}
+
+fn prompt_with_carrier_goal(request: &ProviderAdapterRequest) -> String {
+    let Some(goal) = request
+        .goal
+        .as_deref()
+        .map(str::trim)
+        .filter(|goal| !goal.is_empty())
+    else {
+        return request.content_preview.clone();
+    };
+    if request.goal_status != "active" {
+        return request.content_preview.clone();
+    }
+    format!(
+        "Active carrier session goal: {goal}\nUse this as the persistent task target and completion criterion while it remains active.\n\n{}",
+        request.content_preview
+    )
 }
 
 fn drain_codex_stdout_lines(
@@ -1093,6 +1149,8 @@ mod tests {
             provider: Some(admitted_provider().to_string()),
             model: Some("gpt-5.5".to_string()),
             thinking: None,
+            goal: None,
+            goal_status: "unset".to_string(),
             stream: true,
         };
         let mut sink = NoopProviderOutputSink;
@@ -1108,6 +1166,34 @@ mod tests {
             result,
             ProviderExecutionResult::Failed(error) if error == "codex_subscription_site_root_missing"
         ));
+    }
+
+    #[test]
+    fn active_carrier_goal_is_added_to_codex_prompt() {
+        let request = ProviderAdapterRequest {
+            turn_id: "turn_1".to_string(),
+            input_event_id: "input_1".to_string(),
+            content_preview: "answer with provider text".to_string(),
+            provider_runtime_status: "admitted".to_string(),
+            provider: Some(admitted_provider().to_string()),
+            model: Some("gpt-5.5".to_string()),
+            thinking: None,
+            goal: Some("finish parity".to_string()),
+            goal_status: "active".to_string(),
+            stream: true,
+        };
+
+        assert_eq!(
+            prompt_with_carrier_goal(&request),
+            "Active carrier session goal: finish parity\nUse this as the persistent task target and completion criterion while it remains active.\n\nanswer with provider text"
+        );
+
+        let mut paused = request.clone();
+        paused.goal_status = "paused".to_string();
+        assert_eq!(
+            prompt_with_carrier_goal(&paused),
+            "answer with provider text"
+        );
     }
 
     #[test]

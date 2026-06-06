@@ -146,6 +146,9 @@ mod tests {
                 "exit",
             ]
         );
+        let goal = command_named("goal").expect("goal command exists");
+        assert_eq!(goal.argument.as_deref(), Some("text|pause|resume|clear"));
+        assert_eq!(goal.effect, "show_set_pause_resume_or_clear_carrier_goal");
         assert_eq!(command_name_for_token(" EXIT "), Some("exit"));
     }
 

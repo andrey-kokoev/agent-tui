@@ -48,7 +48,7 @@ pub enum RuntimeOperatorSubmitResult {
         session: String,
         model: Option<String>,
         thinking: Option<String>,
-        goal: Option<String>,
+        goal: RuntimeGoalState,
         queued: usize,
         held: usize,
         turn_state: String,
@@ -72,10 +72,16 @@ pub enum RuntimeOperatorSubmitResult {
         value: String,
     },
     GoalShown {
-        value: Option<String>,
+        goal: RuntimeGoalState,
     },
     GoalChanged {
-        value: String,
+        goal: RuntimeGoalState,
+    },
+    GoalPaused {
+        goal: RuntimeGoalState,
+    },
+    GoalResumed {
+        goal: RuntimeGoalState,
     },
     GoalCleared,
     ToolOutputShown {
@@ -128,7 +134,7 @@ pub struct RuntimeCoordinator {
     next_evidence_index: u64,
     session_model: Option<String>,
     session_thinking: Option<String>,
-    session_goal: Option<String>,
+    session_goal: RuntimeGoalState,
     display_tool_outputs: bool,
     observer_interjections_muted: bool,
     tool_catalog: RuntimeToolCatalog,
@@ -146,6 +152,12 @@ pub struct RuntimeToolCatalog {
 pub struct RuntimeToolCatalogEntry {
     pub tool_name: String,
     pub server_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeGoalState {
+    pub value: Option<String>,
+    pub status: String,
 }
 
 fn run_codex_transcript_stats(value: Option<&str>) -> String {
@@ -221,7 +233,7 @@ fn shell_like_words(value: &str) -> Vec<String> {
         .collect()
 }
 
-fn initial_session_goal_from_env() -> Option<String> {
+fn initial_session_goal_from_env() -> RuntimeGoalState {
     [
         "NARADA_AGENT_TUI_GOAL",
         "NARADA_CARRIER_GOAL",
@@ -229,8 +241,8 @@ fn initial_session_goal_from_env() -> Option<String> {
     ]
     .into_iter()
     .find_map(|key| std::env::var(key).ok())
-    .map(|value| normalize_session_goal(&value))
-    .filter(|value| !value.is_empty())
+    .map(|value| RuntimeGoalState::active(value))
+    .unwrap_or_else(RuntimeGoalState::unset)
 }
 
 fn normalize_session_goal(value: &str) -> String {
@@ -239,6 +251,54 @@ fn normalize_session_goal(value: &str) -> String {
 
 fn is_goal_clear_value(value: &str) -> bool {
     value.trim().eq_ignore_ascii_case("clear")
+}
+
+fn is_goal_pause_value(value: &str) -> bool {
+    value.trim().eq_ignore_ascii_case("pause")
+}
+
+fn is_goal_resume_value(value: &str) -> bool {
+    value.trim().eq_ignore_ascii_case("resume")
+}
+
+impl RuntimeGoalState {
+    pub fn unset() -> Self {
+        Self {
+            value: None,
+            status: "unset".to_string(),
+        }
+    }
+
+    pub fn active(value: impl AsRef<str>) -> Self {
+        let value = normalize_session_goal(value.as_ref());
+        if value.is_empty() {
+            Self::unset()
+        } else {
+            Self {
+                value: Some(value),
+                status: "active".to_string(),
+            }
+        }
+    }
+
+    pub fn paused(value: impl AsRef<str>) -> Self {
+        let value = normalize_session_goal(value.as_ref());
+        if value.is_empty() {
+            Self::unset()
+        } else {
+            Self {
+                value: Some(value),
+                status: "paused".to_string(),
+            }
+        }
+    }
+
+    pub fn value_json(&self) -> Value {
+        match &self.value {
+            Some(value) => json!(value),
+            None => Value::Null,
+        }
+    }
 }
 
 impl RuntimeCoordinator {
@@ -466,7 +526,7 @@ impl RuntimeCoordinator {
             },
             CarrierCommand::Goal { value } => match value {
                 Some(value) if is_goal_clear_value(&value) => {
-                    self.session_goal = None;
+                    self.session_goal = RuntimeGoalState::unset();
                     self.write_carrier_command_evidence(
                         "/goal",
                         clock,
@@ -474,24 +534,69 @@ impl RuntimeCoordinator {
                     )?;
                     Ok(RuntimeOperatorSubmitResult::GoalCleared)
                 }
+                Some(value) if is_goal_pause_value(&value) => {
+                    if let Some(goal_value) = self.session_goal.value.clone() {
+                        self.session_goal = RuntimeGoalState::paused(goal_value);
+                        self.write_carrier_command_evidence(
+                            "/goal",
+                            clock,
+                            json!({ "action": "pause", "value": self.session_goal.value_json(), "status": self.session_goal.status }),
+                        )?;
+                        Ok(RuntimeOperatorSubmitResult::GoalPaused {
+                            goal: self.session_goal.clone(),
+                        })
+                    } else {
+                        self.write_carrier_command_evidence(
+                            "/goal",
+                            clock,
+                            json!({ "action": "pause", "value": null, "status": "unset" }),
+                        )?;
+                        Ok(RuntimeOperatorSubmitResult::GoalShown {
+                            goal: self.session_goal.clone(),
+                        })
+                    }
+                }
+                Some(value) if is_goal_resume_value(&value) => {
+                    if let Some(goal_value) = self.session_goal.value.clone() {
+                        self.session_goal = RuntimeGoalState::active(goal_value);
+                        self.write_carrier_command_evidence(
+                            "/goal",
+                            clock,
+                            json!({ "action": "resume", "value": self.session_goal.value_json(), "status": self.session_goal.status }),
+                        )?;
+                        Ok(RuntimeOperatorSubmitResult::GoalResumed {
+                            goal: self.session_goal.clone(),
+                        })
+                    } else {
+                        self.write_carrier_command_evidence(
+                            "/goal",
+                            clock,
+                            json!({ "action": "resume", "value": null, "status": "unset" }),
+                        )?;
+                        Ok(RuntimeOperatorSubmitResult::GoalShown {
+                            goal: self.session_goal.clone(),
+                        })
+                    }
+                }
                 Some(value) => {
-                    let value = normalize_session_goal(&value);
-                    self.session_goal = Some(value.clone());
+                    self.session_goal = RuntimeGoalState::active(&value);
                     self.write_carrier_command_evidence(
                         "/goal",
                         clock,
-                        json!({ "action": "set", "value": value }),
+                        json!({ "action": "set", "value": self.session_goal.value_json(), "status": self.session_goal.status }),
                     )?;
-                    Ok(RuntimeOperatorSubmitResult::GoalChanged { value })
+                    Ok(RuntimeOperatorSubmitResult::GoalChanged {
+                        goal: self.session_goal.clone(),
+                    })
                 }
                 None => {
                     self.write_carrier_command_evidence(
                         "/goal",
                         clock,
-                        json!({ "action": "show" }),
+                        json!({ "action": "show", "value": self.session_goal.value_json(), "status": self.session_goal.status }),
                     )?;
                     Ok(RuntimeOperatorSubmitResult::GoalShown {
-                        value: self.session_goal.clone(),
+                        goal: self.session_goal.clone(),
                     })
                 }
             },
@@ -1120,14 +1225,13 @@ mod tests {
         let control_path = temp_path("control");
         let session_path = temp_path("session");
         let mut coordinator = RuntimeCoordinator::new(&control_path, &session_path, context());
-
         let changed = coordinator
             .handle_operator_submit("/goal   finish   carrier parity  ", &clock())
             .expect("goal set handled");
         assert_eq!(
             changed,
             RuntimeOperatorSubmitResult::GoalChanged {
-                value: "finish carrier parity".to_string()
+                goal: RuntimeGoalState::active("finish carrier parity")
             }
         );
 
@@ -1137,7 +1241,27 @@ mod tests {
         assert_eq!(
             shown,
             RuntimeOperatorSubmitResult::GoalShown {
-                value: Some("finish carrier parity".to_string())
+                goal: RuntimeGoalState::active("finish carrier parity")
+            }
+        );
+
+        let paused = coordinator
+            .handle_operator_submit("/goal pause", &clock())
+            .expect("goal pause handled");
+        assert_eq!(
+            paused,
+            RuntimeOperatorSubmitResult::GoalPaused {
+                goal: RuntimeGoalState::paused("finish carrier parity")
+            }
+        );
+
+        let resumed = coordinator
+            .handle_operator_submit("/goal resume", &clock())
+            .expect("goal resume handled");
+        assert_eq!(
+            resumed,
+            RuntimeOperatorSubmitResult::GoalResumed {
+                goal: RuntimeGoalState::active("finish carrier parity")
             }
         );
 
@@ -1152,7 +1276,7 @@ mod tests {
         assert_eq!(
             none_goal,
             RuntimeOperatorSubmitResult::GoalChanged {
-                value: "none".to_string()
+                goal: RuntimeGoalState::active("none")
             }
         );
 
@@ -1162,7 +1286,7 @@ mod tests {
         assert_eq!(
             reset_goal,
             RuntimeOperatorSubmitResult::GoalChanged {
-                value: "reset".to_string()
+                goal: RuntimeGoalState::active("reset")
             }
         );
 
@@ -1171,21 +1295,26 @@ mod tests {
             .lines()
             .map(|line| parse_session_event(line).expect("event parses"))
             .collect::<Vec<_>>();
-        assert_eq!(events.len(), 5);
+        assert_eq!(events.len(), 7);
         assert_eq!(events[0].payload["command"], "/goal");
         assert_eq!(events[0].payload["details"]["action"], "set");
         assert_eq!(
             events[0].payload["details"]["value"],
             "finish carrier parity"
         );
+        assert_eq!(events[0].payload["details"]["status"], "active");
         assert_eq!(events[1].payload["details"]["action"], "show");
-        assert_eq!(events[2].payload["details"]["action"], "clear");
-        assert_eq!(events[2].payload["details"]["value"], Value::Null);
-        assert_eq!(events[3].payload["details"]["action"], "set");
-        assert_eq!(events[3].payload["details"]["value"], "none");
-        assert_eq!(events[4].payload["details"]["action"], "set");
-        assert_eq!(events[4].payload["details"]["value"], "reset");
-
+        assert_eq!(events[1].payload["details"]["status"], "active");
+        assert_eq!(events[2].payload["details"]["action"], "pause");
+        assert_eq!(events[2].payload["details"]["status"], "paused");
+        assert_eq!(events[3].payload["details"]["action"], "resume");
+        assert_eq!(events[3].payload["details"]["status"], "active");
+        assert_eq!(events[4].payload["details"]["action"], "clear");
+        assert_eq!(events[4].payload["details"]["value"], Value::Null);
+        assert_eq!(events[5].payload["details"]["action"], "set");
+        assert_eq!(events[5].payload["details"]["value"], "none");
+        assert_eq!(events[6].payload["details"]["action"], "set");
+        assert_eq!(events[6].payload["details"]["value"], "reset");
         remove_file(control_path).ok();
         remove_file(session_path).ok();
     }
@@ -1693,7 +1822,7 @@ mod tests {
                 session: "carrier_fixture_1".to_string(),
                 model: Some("gpt-5.5-mini".to_string()),
                 thinking: Some("high".to_string()),
-                goal: Some("finish carrier parity".to_string()),
+                goal: RuntimeGoalState::active("finish carrier parity"),
                 queued: 0,
                 held: 0,
                 turn_state: "idle".to_string(),

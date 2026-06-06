@@ -64,6 +64,7 @@ pub struct TurnCoordinator {
     active_worker: Option<ActiveTurnWorker>,
     pending_session_model: Option<Option<String>>,
     pending_session_thinking: Option<Option<String>>,
+    pending_session_goal: Option<(Option<String>, String)>,
     next_event_index: u64,
     next_turn_index: u64,
 }
@@ -119,6 +120,7 @@ impl TurnCoordinator {
             active_worker: None,
             pending_session_model: None,
             pending_session_thinking: None,
+            pending_session_goal: None,
             next_event_index: 1,
             next_turn_index: 1,
         }
@@ -146,6 +148,15 @@ impl TurnCoordinator {
         }
     }
 
+    pub fn set_provider_goal(&mut self, goal: Option<String>, status: String) {
+        if let Some(provider_adapter) = self.provider_adapter.as_mut() {
+            provider_adapter.set_session_goal(goal, status);
+            self.pending_session_goal = None;
+        } else {
+            self.pending_session_goal = Some((goal, status));
+        }
+    }
+
     fn apply_pending_provider_settings(&mut self) {
         let Some(provider_adapter) = self.provider_adapter.as_mut() else {
             return;
@@ -155,6 +166,9 @@ impl TurnCoordinator {
         }
         if let Some(thinking) = self.pending_session_thinking.take() {
             provider_adapter.set_session_thinking(thinking);
+        }
+        if let Some((goal, status)) = self.pending_session_goal.take() {
+            provider_adapter.set_session_goal(goal, status);
         }
     }
     pub fn run_one_ready_turn(

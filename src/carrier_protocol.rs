@@ -594,6 +594,15 @@ fn validate_provider_request_payload(payload: &Value) -> Result<(), String> {
     require_payload_nonempty_string(payload, "provider_streaming_contract")?;
     require_payload_nonempty_string(payload, "provider_adapter_admission_status")?;
     require_payload_string(payload, "content_preview")?;
+    if let Some(goal) = payload.get("goal") {
+        match goal {
+            Value::String(_) | Value::Null => {}
+            _ => return Err("payload.invalid_goal".to_string()),
+        }
+    }
+    if payload.get("goal_status").is_some() {
+        require_payload_nonempty_string(payload, "goal_status")?;
+    }
     match payload.get("provider_execution_enabled") {
         Some(Value::Bool(_)) => {}
         _ => return Err("payload.invalid_provider_execution_enabled".to_string()),
