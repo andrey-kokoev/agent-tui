@@ -442,9 +442,31 @@ fn run_turn_worker_inner(
             && matches!(provider_record.status, ProviderDispatchStatus::Completed);
         final_provider_record = Some(provider_record);
         if has_follow_up && round == MAX_PROVIDER_FOLLOW_UP_ROUNDS {
-            return Err(format!(
-                "provider_follow_up_round_limit_exceeded:{MAX_PROVIDER_FOLLOW_UP_ROUNDS}"
-            ));
+            let error =
+                format!("provider_follow_up_round_limit_exceeded:{MAX_PROVIDER_FOLLOW_UP_ROUNDS}");
+            let provider_record = final_provider_record
+                .as_ref()
+                .ok_or_else(|| "turn_provider_follow_up_record_missing".to_string())?;
+            let terminal = session_event_with_index(
+                evidence_context,
+                SessionEventKind::TurnFailed,
+                clock,
+                create_turn_terminal_payload(
+                    &turn_id,
+                    Some(&input.event_id),
+                    provider_record.status.as_str(),
+                    "failed",
+                    provider_record.provider_execution_enabled,
+                    Some(&error),
+                ),
+                next_event_index,
+            );
+            append_session_event(session_jsonl_path, &terminal)?;
+            return Ok(CompletedTurn {
+                turn_id,
+                input_event_id: input.event_id,
+                evidence_written: 4 + output_evidence_count,
+            });
         }
         if !has_follow_up {
             break;
@@ -1041,7 +1063,7 @@ mod tests {
     }
 
     #[test]
-    fn errors_when_provider_follow_up_round_limit_is_exceeded() {
+    fn records_failed_turn_when_provider_follow_up_round_limit_is_exceeded() {
         let path = temp_session_path();
         let mut input = parse_input_event(INPUT_FIXTURE).expect("input parses");
         input.delivery_mode = DeliveryMode::AdmitAfterActiveTurn;
@@ -1054,11 +1076,29 @@ mod tests {
             Box::new(WritingProviderToolCallExecutor),
         );
 
-        let error = coordinator
+        let completed = coordinator
             .run_one_ready_turn(&mut queue, &clock())
-            .expect_err("follow-up loop limit should fail explicitly");
+            .expect("follow-up loop limit records terminal failure")
+            .expect("turn is terminal");
 
-        assert_eq!(error, "provider_follow_up_round_limit_exceeded:8");
+        assert_eq!(completed.turn_id, "turn_1");
+        assert_eq!(queue.turn_state(), TurnState::Idle);
+
+        let session_jsonl = read_to_string(&path).expect("session jsonl exists");
+        let terminal = parse_session_event(
+            session_jsonl
+                .lines()
+                .last()
+                .expect("terminal event is written"),
+        )
+        .expect("terminal event parses");
+
+        assert_eq!(terminal.event_kind, SessionEventKind::TurnFailed);
+        assert_eq!(terminal.payload["terminal_status"], "failed");
+        assert_eq!(
+            terminal.payload["error_summary"],
+            "provider_follow_up_round_limit_exceeded:8"
+        );
         remove_file(path).ok();
     }
 
