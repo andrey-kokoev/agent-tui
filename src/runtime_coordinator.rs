@@ -1,16 +1,26 @@
 use crate::carrier_command::{CarrierCommand, OperatorSubmit, parse_operator_submit};
+use crate::carrier_input_pipeline_contract::{
+    CarrierInputPipelineAdmission, CarrierInputPipelineState, classify_carrier_input_pipeline,
+};
 use crate::carrier_protocol::{
     DeliveryMode, InputEvent, SessionEvent, SessionEventKind, SourceKind, Transport,
     input_event_schema, session_event_schema,
+};
+use crate::carrier_protocol_contract::{
+    observer_muted_suppression_reason, observer_visibility_default, observer_visibility_is_valid,
+    observer_visibility_values,
 };
 use crate::control_jsonl::ControlJsonlError;
 use crate::control_watcher::ControlJsonlWatcher;
 use crate::input_queue::{
     AdmissionDecision, InputQueue, QueuedInputSummary, SessionEvidenceContext,
 };
+use crate::mcp_fabric_transport::McpFabricTransportClient;
+use crate::mcp_runtime_config::{McpRuntimeAdmissionStatus, McpRuntimeConfig};
 use crate::provider_adapter_contract::provider_adapter_contract;
 use crate::session_jsonl::append_session_event;
-use serde_json::json;
+use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -38,6 +48,7 @@ pub enum RuntimeOperatorSubmitResult {
         session: String,
         model: Option<String>,
         thinking: Option<String>,
+        goal: Option<String>,
         queued: usize,
         held: usize,
         turn_state: String,
@@ -60,6 +71,13 @@ pub enum RuntimeOperatorSubmitResult {
     ThinkingRejected {
         value: String,
     },
+    GoalShown {
+        value: Option<String>,
+    },
+    GoalChanged {
+        value: String,
+    },
+    GoalCleared,
     ToolOutputShown {
         shown: bool,
     },
@@ -68,6 +86,21 @@ pub enum RuntimeOperatorSubmitResult {
     },
     ToolOutputRejected {
         value: String,
+    },
+    ToolsShown {
+        filter: Option<String>,
+        output: String,
+    },
+    ObserversShown {
+        interjections_muted: bool,
+        visibility_values: Vec<String>,
+        output: String,
+    },
+    ObserverMuted,
+    ObserverUnmuted,
+    LocalMessage {
+        command: String,
+        message: String,
     },
     ClearDisplay,
     Exit,
@@ -95,7 +128,24 @@ pub struct RuntimeCoordinator {
     next_evidence_index: u64,
     session_model: Option<String>,
     session_thinking: Option<String>,
+    session_goal: Option<String>,
     display_tool_outputs: bool,
+    observer_interjections_muted: bool,
+    tool_catalog: RuntimeToolCatalog,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeToolCatalog {
+    pub status: String,
+    pub source: Option<String>,
+    pub entries: Vec<RuntimeToolCatalogEntry>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeToolCatalogEntry {
+    pub tool_name: String,
+    pub server_name: String,
 }
 
 fn run_codex_transcript_stats(value: Option<&str>) -> String {
@@ -171,6 +221,26 @@ fn shell_like_words(value: &str) -> Vec<String> {
         .collect()
 }
 
+fn initial_session_goal_from_env() -> Option<String> {
+    [
+        "NARADA_AGENT_TUI_GOAL",
+        "NARADA_CARRIER_GOAL",
+        "NARADA_GOAL",
+    ]
+    .into_iter()
+    .find_map(|key| std::env::var(key).ok())
+    .map(|value| normalize_session_goal(&value))
+    .filter(|value| !value.is_empty())
+}
+
+fn normalize_session_goal(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn is_goal_clear_value(value: &str) -> bool {
+    value.trim().eq_ignore_ascii_case("clear")
+}
+
 impl RuntimeCoordinator {
     pub fn new(
         control_jsonl_path: impl Into<PathBuf>,
@@ -190,12 +260,23 @@ impl RuntimeCoordinator {
             session_thinking: std::env::var(&provider_contract.ai_thinking_env_var)
                 .ok()
                 .filter(|value| !value.trim().is_empty()),
+            session_goal: initial_session_goal_from_env(),
             display_tool_outputs: true,
+            observer_interjections_muted: false,
+            tool_catalog: RuntimeToolCatalog::from_process_env(),
         }
     }
 
     pub fn display_tool_outputs(&self) -> bool {
         self.display_tool_outputs
+    }
+
+    pub fn observer_interjections_muted(&self) -> bool {
+        self.observer_interjections_muted
+    }
+
+    pub fn set_tool_catalog(&mut self, tool_catalog: RuntimeToolCatalog) {
+        self.tool_catalog = tool_catalog;
     }
 
     pub fn queue(&self) -> &InputQueue {
@@ -220,20 +301,51 @@ impl RuntimeCoordinator {
         clock: &RuntimeCoordinatorClock,
     ) -> Result<RuntimeCoordinatorPollResult, String> {
         let poll = self.watcher.poll_once()?;
+        let mut admitted_or_queued = 0;
         let mut evidence_written = 0;
 
         for entry in poll.entries {
             let input = entry.event.input;
+            let pipeline = classify_carrier_input_pipeline(
+                &input,
+                CarrierInputPipelineState {
+                    active_turn: self.queue.turn_state() == crate::input_queue::TurnState::Active,
+                    composer_has_draft,
+                    observer_muted: self.observer_interjections_muted,
+                },
+            );
+            if self.is_observer_pipeline(&pipeline) {
+                let observer_events = self.observer_pipeline_events(&input, &pipeline, clock);
+                let observer_event_count = observer_events.len();
+                for event in observer_events {
+                    self.write_evidence(&event)?;
+                }
+                evidence_written += observer_event_count;
+                if !pipeline.dispatch_to_provider {
+                    continue;
+                }
+            }
+            if pipeline.should_defer && input.hold_condition.is_some() {
+                let decision = self
+                    .queue
+                    .admit_input_event(input.clone(), composer_has_draft);
+                let event = self.evidence_for_input_decision(&decision, &input, clock);
+                self.write_evidence(&event)?;
+                admitted_or_queued += 1;
+                evidence_written += 1;
+                continue;
+            }
             let decision = self
                 .queue
                 .admit_input_event(input.clone(), composer_has_draft);
             let event = self.evidence_for_input_decision(&decision, &input, clock);
             self.write_evidence(&event)?;
+            admitted_or_queued += 1;
             evidence_written += 1;
         }
 
         Ok(RuntimeCoordinatorPollResult {
-            admitted_or_queued: evidence_written,
+            admitted_or_queued,
             parse_errors: poll.errors,
             evidence_written,
             bytes_read: poll.bytes_read,
@@ -302,6 +414,7 @@ impl RuntimeCoordinator {
                     session: self.evidence_context.carrier_session_id.clone(),
                     model: self.session_model.clone(),
                     thinking: self.session_thinking.clone(),
+                    goal: self.session_goal.clone(),
                     queued: self.queue.queued_count(),
                     held: self.queue.held_count(),
                     turn_state: format!("{:?}", self.queue.turn_state()).to_ascii_lowercase(),
@@ -351,6 +464,37 @@ impl RuntimeCoordinator {
                     })
                 }
             },
+            CarrierCommand::Goal { value } => match value {
+                Some(value) if is_goal_clear_value(&value) => {
+                    self.session_goal = None;
+                    self.write_carrier_command_evidence(
+                        "/goal",
+                        clock,
+                        json!({ "action": "clear", "value": null }),
+                    )?;
+                    Ok(RuntimeOperatorSubmitResult::GoalCleared)
+                }
+                Some(value) => {
+                    let value = normalize_session_goal(&value);
+                    self.session_goal = Some(value.clone());
+                    self.write_carrier_command_evidence(
+                        "/goal",
+                        clock,
+                        json!({ "action": "set", "value": value }),
+                    )?;
+                    Ok(RuntimeOperatorSubmitResult::GoalChanged { value })
+                }
+                None => {
+                    self.write_carrier_command_evidence(
+                        "/goal",
+                        clock,
+                        json!({ "action": "show" }),
+                    )?;
+                    Ok(RuntimeOperatorSubmitResult::GoalShown {
+                        value: self.session_goal.clone(),
+                    })
+                }
+            },
             CarrierCommand::ToolOutput { value } => {
                 let normalized = value.as_deref().map(str::to_ascii_lowercase);
                 match normalized.as_deref() {
@@ -393,6 +537,45 @@ impl RuntimeCoordinator {
                         value: value.to_string(),
                     }),
                 }
+            }
+            CarrierCommand::Tools { value } => {
+                let output = self.tool_catalog.render(value.as_deref());
+                self.write_carrier_command_evidence(
+                    "/tools",
+                    clock,
+                    json!({ "arguments": value }),
+                )?;
+                Ok(RuntimeOperatorSubmitResult::ToolsShown {
+                    filter: value,
+                    output,
+                })
+            }
+            CarrierCommand::Observers => {
+                self.write_carrier_command_evidence("/observers", clock, json!({}))?;
+                let visibility_values = observer_visibility_values().to_vec();
+                Ok(RuntimeOperatorSubmitResult::ObserversShown {
+                    interjections_muted: self.observer_interjections_muted,
+                    output: observer_posture_text(self.observer_interjections_muted),
+                    visibility_values,
+                })
+            }
+            CarrierCommand::ObserverMute => {
+                self.observer_interjections_muted = true;
+                self.write_carrier_command_evidence(
+                    "/observer mute",
+                    clock,
+                    json!({ "observer_interjections_muted": true }),
+                )?;
+                Ok(RuntimeOperatorSubmitResult::ObserverMuted)
+            }
+            CarrierCommand::ObserverUnmute => {
+                self.observer_interjections_muted = false;
+                self.write_carrier_command_evidence(
+                    "/observer unmute",
+                    clock,
+                    json!({ "observer_interjections_muted": false }),
+                )?;
+                Ok(RuntimeOperatorSubmitResult::ObserverUnmuted)
             }
             CarrierCommand::Clear => {
                 self.write_carrier_command_evidence("/clear", clock, json!({}))?;
@@ -537,6 +720,54 @@ impl RuntimeCoordinator {
         }
     }
 
+    fn is_observer_pipeline(&self, pipeline: &CarrierInputPipelineAdmission) -> bool {
+        pipeline
+            .admission_event_kinds
+            .iter()
+            .any(|kind| kind.starts_with("observer_"))
+    }
+
+    fn observer_pipeline_events(
+        &mut self,
+        input: &InputEvent,
+        pipeline: &CarrierInputPipelineAdmission,
+        clock: &RuntimeCoordinatorClock,
+    ) -> Vec<SessionEvent> {
+        let mut events = Vec::new();
+        for kind in &pipeline.admission_event_kinds {
+            let event_kind = match *kind {
+                "observer_observation_recorded" => SessionEventKind::ObserverObservationRecorded,
+                "observer_interjection_proposed" => SessionEventKind::ObserverInterjectionProposed,
+                "observer_interjection_suppressed" => {
+                    SessionEventKind::ObserverInterjectionSuppressed
+                }
+                "observer_interjection_admitted" => SessionEventKind::ObserverInterjectionAdmitted,
+                "input_admitted_to_turn" => continue,
+                _ => continue,
+            };
+            let suppression_reason =
+                if event_kind == SessionEventKind::ObserverInterjectionSuppressed {
+                    pipeline
+                        .suppression_reason
+                        .or(Some(observer_muted_suppression_reason()))
+                } else {
+                    None
+                };
+            events.push(SessionEvent {
+                schema: session_event_schema().to_string(),
+                event_kind,
+                event_id: self.next_event_id(clock),
+                occurred_at: clock.occurred_at.clone(),
+                carrier_session_id: self.evidence_context.carrier_session_id.clone(),
+                agent_id: self.evidence_context.agent_id.clone(),
+                site_id: self.evidence_context.site_id.clone(),
+                site_root: self.evidence_context.site_root.clone(),
+                payload: observer_payload_from_input(input, suppression_reason),
+            });
+        }
+        events
+    }
+
     fn write_carrier_command_evidence(
         &mut self,
         command: &str,
@@ -588,10 +819,171 @@ impl RuntimeCoordinator {
     }
 }
 
+impl RuntimeToolCatalog {
+    pub fn disabled() -> Self {
+        Self {
+            status: "disabled".to_string(),
+            source: None,
+            entries: Vec::new(),
+            error: None,
+        }
+    }
+
+    pub fn configured(
+        source: impl Into<String>,
+        entries: impl IntoIterator<Item = RuntimeToolCatalogEntry>,
+    ) -> Self {
+        Self {
+            status: "configured".to_string(),
+            source: Some(source.into()),
+            entries: entries.into_iter().collect(),
+            error: None,
+        }
+    }
+
+    fn from_process_env() -> Self {
+        let env = std::env::vars().collect::<BTreeMap<_, _>>();
+        Self::from_mcp_runtime_config(&McpRuntimeConfig::from_env_map(&env))
+    }
+
+    pub fn from_mcp_runtime_config(config: &McpRuntimeConfig) -> Self {
+        match config.status {
+            McpRuntimeAdmissionStatus::Disabled => Self::disabled(),
+            McpRuntimeAdmissionStatus::Refused => Self {
+                status: "refused".to_string(),
+                source: config.config_path.clone(),
+                entries: Vec::new(),
+                error: config.refusal_reason.clone(),
+            },
+            McpRuntimeAdmissionStatus::Configured => {
+                let Some(config_path) = config.config_path.as_deref() else {
+                    return Self {
+                        status: "refused".to_string(),
+                        source: None,
+                        entries: Vec::new(),
+                        error: Some("missing_mcp_config".to_string()),
+                    };
+                };
+                match McpFabricTransportClient::from_path(config_path) {
+                    Ok(client) => Self {
+                        status: "configured".to_string(),
+                        source: Some(config_path.to_string()),
+                        entries: client
+                            .tool_to_server
+                            .into_iter()
+                            .map(|(tool_name, server_name)| RuntimeToolCatalogEntry {
+                                tool_name,
+                                server_name,
+                            })
+                            .collect(),
+                        error: None,
+                    },
+                    Err(error) => Self {
+                        status: "refused".to_string(),
+                        source: Some(config_path.to_string()),
+                        entries: Vec::new(),
+                        error: Some(error),
+                    },
+                }
+            }
+        }
+    }
+
+    fn render(&self, filter: Option<&str>) -> String {
+        let filter = filter.map(str::trim).filter(|value| !value.is_empty());
+        let mut lines = Vec::new();
+        lines.push(match filter {
+            Some(filter) => format!("Tool catalog ({}, filter: {filter})", self.status),
+            None => format!("Tool catalog ({})", self.status),
+        });
+        if let Some(source) = &self.source {
+            lines.push(format!("Source: {source}"));
+        }
+        if let Some(error) = &self.error {
+            lines.push(format!("Error: {error}"));
+        }
+        let filtered = self
+            .entries
+            .iter()
+            .filter(|entry| match filter {
+                Some(filter) => {
+                    let filter = filter.to_ascii_lowercase();
+                    entry.tool_name.to_ascii_lowercase().contains(&filter)
+                        || entry.server_name.to_ascii_lowercase().contains(&filter)
+                }
+                None => true,
+            })
+            .collect::<Vec<_>>();
+        if filtered.is_empty() {
+            lines.push("No tools matched.".to_string());
+        } else {
+            for entry in filtered {
+                lines.push(format!("- {} ({})", entry.tool_name, entry.server_name));
+            }
+        }
+        lines.join("\n")
+    }
+}
+
+impl RuntimeToolCatalogEntry {
+    pub fn new(tool_name: impl Into<String>, server_name: impl Into<String>) -> Self {
+        Self {
+            tool_name: tool_name.into(),
+            server_name: server_name.into(),
+        }
+    }
+}
+
+fn observer_posture_text(observer_interjections_muted: bool) -> String {
+    format!(
+        "Observer posture\nInterjections muted: {}\nSupported visibility: {}",
+        if observer_interjections_muted {
+            "yes"
+        } else {
+            "no"
+        },
+        observer_visibility_values().join(", ")
+    )
+}
+
+fn observer_payload_from_input(input: &InputEvent, suppression_reason: Option<&str>) -> Value {
+    let observer = input.metadata.get("observer").unwrap_or(&Value::Null);
+    let visibility = observer
+        .get("visibility")
+        .and_then(Value::as_str)
+        .filter(|value| observer_visibility_is_valid(value))
+        .map(str::to_string)
+        .unwrap_or_else(|| observer_visibility_default().to_string());
+    let mut payload = json!({
+        "observer_id": observer
+            .get("observer_id")
+            .or_else(|| observer.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or(input.source_id.as_str()),
+        "rule_id": observer
+            .get("rule_id")
+            .and_then(Value::as_str)
+            .unwrap_or("observer_interjection"),
+        "visibility": visibility,
+        "content": input.content,
+        "input_event_id": input.event_id,
+    });
+    if let Some(confidence) = observer.get("confidence").and_then(Value::as_str) {
+        payload["confidence"] = json!(confidence);
+    }
+    if let Some(reason) = suppression_reason {
+        payload["suppression_reason"] = json!(reason);
+    }
+    payload
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::carrier_protocol::parse_session_event;
+    use crate::carrier_protocol::{
+        control_input_event_schema, input_event_schema, parse_session_event,
+    };
+    use serde_json::{Value, json};
     use std::fs::{OpenOptions, read_to_string, remove_file};
     use std::io::Write;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -633,6 +1025,56 @@ mod tests {
         }
     }
 
+    fn observer_control_event(input_event_id: &str, content: &str, visibility: &str) -> String {
+        serde_json::to_string(&json!({
+            "schema": control_input_event_schema(),
+            "control_event_id": format!("control_{input_event_id}"),
+            "input_event_id": input_event_id,
+            "written_at": "2026-05-30T00:00:01.000Z",
+            "input": {
+                "schema": input_event_schema(),
+                "event_id": input_event_id,
+                "source_kind": "agent",
+                "source_id": "narada.observer.fixture",
+                "transport": "control_jsonl",
+                "delivery_mode": "admit_for_current_turn",
+                "hold_condition": null,
+                "content": content,
+                "created_at": "2026-05-30T00:00:01.000Z",
+                "authority_ref": null,
+                "directive_id": null,
+                "metadata": {
+                    "observer": {
+                        "role": "observer",
+                        "observer_id": "observer.fixture",
+                        "rule_id": "fixture_rule",
+                        "visibility": visibility
+                    }
+                }
+            }
+        }))
+        .expect("observer control event serializes")
+    }
+
+    fn fixture_tool_catalog() -> RuntimeToolCatalog {
+        RuntimeToolCatalog::configured(
+            "fixture-mcp-config.json",
+            [
+                RuntimeToolCatalogEntry::new("site_loop_run_once", "sonar-site-loop"),
+                RuntimeToolCatalogEntry::new("task_lifecycle_next", "task-lifecycle"),
+                RuntimeToolCatalogEntry::new("mcp_output_show", "agent-context"),
+            ],
+        )
+    }
+
+    fn event_kinds(session_path: &Path) -> Vec<SessionEventKind> {
+        read_to_string(session_path)
+            .expect("session jsonl exists")
+            .lines()
+            .map(|line| parse_session_event(line).expect("event parses").event_kind)
+            .collect()
+    }
+
     #[test]
     fn carrier_tool_output_toggles_display_state_and_records_evidence() {
         let control_path = temp_path("control");
@@ -668,6 +1110,368 @@ mod tests {
         );
         assert_eq!(events[0].payload["command"], "/tool-output");
         assert_eq!(events[0].payload["details"]["value"], "hidden");
+
+        remove_file(control_path).ok();
+        remove_file(session_path).ok();
+    }
+
+    #[test]
+    fn goal_command_sets_shows_and_clears_session_goal() {
+        let control_path = temp_path("control");
+        let session_path = temp_path("session");
+        let mut coordinator = RuntimeCoordinator::new(&control_path, &session_path, context());
+
+        let changed = coordinator
+            .handle_operator_submit("/goal   finish   carrier parity  ", &clock())
+            .expect("goal set handled");
+        assert_eq!(
+            changed,
+            RuntimeOperatorSubmitResult::GoalChanged {
+                value: "finish carrier parity".to_string()
+            }
+        );
+
+        let shown = coordinator
+            .handle_operator_submit("/goal", &clock())
+            .expect("goal show handled");
+        assert_eq!(
+            shown,
+            RuntimeOperatorSubmitResult::GoalShown {
+                value: Some("finish carrier parity".to_string())
+            }
+        );
+
+        let cleared = coordinator
+            .handle_operator_submit("/goal clear", &clock())
+            .expect("goal clear handled");
+        assert_eq!(cleared, RuntimeOperatorSubmitResult::GoalCleared);
+
+        let none_goal = coordinator
+            .handle_operator_submit("/goal none", &clock())
+            .expect("goal none handled");
+        assert_eq!(
+            none_goal,
+            RuntimeOperatorSubmitResult::GoalChanged {
+                value: "none".to_string()
+            }
+        );
+
+        let reset_goal = coordinator
+            .handle_operator_submit("/goal reset", &clock())
+            .expect("goal reset handled");
+        assert_eq!(
+            reset_goal,
+            RuntimeOperatorSubmitResult::GoalChanged {
+                value: "reset".to_string()
+            }
+        );
+
+        let session_jsonl = read_to_string(&session_path).expect("session jsonl exists");
+        let events = session_jsonl
+            .lines()
+            .map(|line| parse_session_event(line).expect("event parses"))
+            .collect::<Vec<_>>();
+        assert_eq!(events.len(), 5);
+        assert_eq!(events[0].payload["command"], "/goal");
+        assert_eq!(events[0].payload["details"]["action"], "set");
+        assert_eq!(
+            events[0].payload["details"]["value"],
+            "finish carrier parity"
+        );
+        assert_eq!(events[1].payload["details"]["action"], "show");
+        assert_eq!(events[2].payload["details"]["action"], "clear");
+        assert_eq!(events[2].payload["details"]["value"], Value::Null);
+        assert_eq!(events[3].payload["details"]["action"], "set");
+        assert_eq!(events[3].payload["details"]["value"], "none");
+        assert_eq!(events[4].payload["details"]["action"], "set");
+        assert_eq!(events[4].payload["details"]["value"], "reset");
+
+        remove_file(control_path).ok();
+        remove_file(session_path).ok();
+    }
+
+    #[test]
+    fn tools_command_returns_filtered_catalog_without_provider_turn() {
+        let control_path = temp_path("control");
+        let session_path = temp_path("session");
+        let mut coordinator = RuntimeCoordinator::new(&control_path, &session_path, context());
+        coordinator.set_tool_catalog(fixture_tool_catalog());
+
+        let result = coordinator
+            .handle_operator_submit("/tools lifecycle", &clock())
+            .expect("tools command handled");
+
+        match result {
+            RuntimeOperatorSubmitResult::ToolsShown { filter, output } => {
+                assert_eq!(filter.as_deref(), Some("lifecycle"));
+                assert!(output.contains("Tool catalog (configured, filter: lifecycle)"));
+                assert!(output.contains("task_lifecycle_next"));
+                assert!(!output.contains("site_loop_run_once"));
+                assert!(!output.contains("not implemented"));
+            }
+            other => panic!("unexpected result: {other:?}"),
+        }
+        let session_jsonl = read_to_string(&session_path).expect("session jsonl exists");
+        let lines: Vec<&str> = session_jsonl.lines().collect();
+        assert_eq!(lines.len(), 1);
+        let command = parse_session_event(lines[0]).expect("command event parses");
+        assert_eq!(command.event_kind, SessionEventKind::CarrierCommandExecuted);
+        assert_eq!(command.payload["command"], "/tools");
+        assert_eq!(command.payload["details"]["arguments"], "lifecycle");
+
+        remove_file(control_path).ok();
+        remove_file(session_path).ok();
+    }
+
+    #[test]
+    fn observers_command_reports_current_posture_and_visibility_values() {
+        let control_path = temp_path("control");
+        let session_path = temp_path("session");
+        let mut coordinator = RuntimeCoordinator::new(&control_path, &session_path, context());
+        coordinator
+            .handle_operator_submit("/observer mute", &clock())
+            .expect("observer mute succeeds");
+
+        let result = coordinator
+            .handle_operator_submit("/observers", &clock())
+            .expect("observers command succeeds");
+
+        match result {
+            RuntimeOperatorSubmitResult::ObserversShown {
+                interjections_muted,
+                visibility_values,
+                output,
+            } => {
+                assert!(interjections_muted);
+                assert!(visibility_values.contains(&"operator_visible".to_string()));
+                assert!(visibility_values.contains(&"conversation_visible".to_string()));
+                assert!(output.contains("Interjections muted: yes"));
+                assert!(output.contains("operator_visible"));
+                assert!(!output.contains("not implemented"));
+            }
+            other => panic!("unexpected result: {other:?}"),
+        }
+
+        remove_file(control_path).ok();
+        remove_file(session_path).ok();
+    }
+
+    #[test]
+    fn muted_record_only_observer_records_observation_without_suppression() {
+        let control_path = temp_path("control");
+        let session_path = temp_path("session");
+        let mut coordinator = RuntimeCoordinator::new(&control_path, &session_path, context());
+
+        let mute = coordinator
+            .handle_operator_submit("/observer mute", &clock())
+            .expect("observer mute succeeds");
+        assert_eq!(mute, RuntimeOperatorSubmitResult::ObserverMuted);
+        assert!(coordinator.observer_interjections_muted());
+
+        append(
+            &control_path,
+            &observer_control_event(
+                "input_observer_record_only_1",
+                "record-only observer note",
+                "record_only",
+            ),
+        );
+        append(&control_path, "\n");
+        let result = coordinator
+            .poll_once(false, &clock())
+            .expect("poll once succeeds");
+
+        assert_eq!(result.admitted_or_queued, 0);
+        assert_eq!(result.evidence_written, 1);
+        assert_eq!(coordinator.queue().queued_count(), 0);
+        assert_eq!(
+            event_kinds(&session_path),
+            vec![
+                SessionEventKind::CarrierCommandExecuted,
+                SessionEventKind::ObserverObservationRecorded,
+            ]
+        );
+
+        remove_file(control_path).ok();
+        remove_file(session_path).ok();
+    }
+
+    #[test]
+    fn muted_visible_observer_records_observation_proposal_and_suppression() {
+        let control_path = temp_path("control");
+        let session_path = temp_path("session");
+        let mut coordinator = RuntimeCoordinator::new(&control_path, &session_path, context());
+
+        coordinator
+            .handle_operator_submit("/observer mute", &clock())
+            .expect("observer mute succeeds");
+
+        append(
+            &control_path,
+            &observer_control_event(
+                "input_observer_fixture_1",
+                "visible observer note",
+                "conversation_visible",
+            ),
+        );
+        append(&control_path, "\n");
+        let result = coordinator
+            .poll_once(false, &clock())
+            .expect("poll once succeeds");
+
+        assert_eq!(result.admitted_or_queued, 0);
+        assert_eq!(result.evidence_written, 3);
+        assert_eq!(coordinator.queue().queued_count(), 0);
+        assert_eq!(
+            event_kinds(&session_path),
+            vec![
+                SessionEventKind::CarrierCommandExecuted,
+                SessionEventKind::ObserverObservationRecorded,
+                SessionEventKind::ObserverInterjectionProposed,
+                SessionEventKind::ObserverInterjectionSuppressed,
+            ]
+        );
+
+        let session_jsonl = read_to_string(&session_path).expect("session jsonl exists");
+        let lines: Vec<&str> = session_jsonl.lines().collect();
+        assert_eq!(lines.len(), 4);
+        let command = parse_session_event(lines[0]).expect("command event parses");
+        assert_eq!(command.payload["command"], "/observer mute");
+        assert_eq!(
+            command.payload["details"]["observer_interjections_muted"],
+            true
+        );
+        let suppressed = parse_session_event(lines[3]).expect("suppression event parses");
+        assert_eq!(
+            suppressed.event_kind,
+            SessionEventKind::ObserverInterjectionSuppressed
+        );
+        assert_eq!(
+            suppressed.payload["input_event_id"],
+            "input_observer_fixture_1"
+        );
+        assert_eq!(suppressed.payload["observer_id"], "observer.fixture");
+        assert_eq!(suppressed.payload["rule_id"], "fixture_rule");
+        assert_eq!(suppressed.payload["visibility"], "conversation_visible");
+        assert_eq!(
+            suppressed.payload["suppression_reason"],
+            observer_muted_suppression_reason()
+        );
+
+        remove_file(control_path).ok();
+        remove_file(session_path).ok();
+    }
+
+    #[test]
+    fn unmuted_operator_visible_observer_completes_without_provider_turn_admission() {
+        let control_path = temp_path("control");
+        let session_path = temp_path("session");
+        let mut coordinator = RuntimeCoordinator::new(&control_path, &session_path, context());
+
+        append(
+            &control_path,
+            &observer_control_event(
+                "input_observer_operator_visible_1",
+                "operator-visible observer note",
+                "operator_visible",
+            ),
+        );
+        append(&control_path, "\n");
+        let result = coordinator
+            .poll_once(false, &clock())
+            .expect("poll once succeeds");
+
+        assert_eq!(result.admitted_or_queued, 0);
+        assert_eq!(result.evidence_written, 3);
+        assert_eq!(
+            event_kinds(&session_path),
+            vec![
+                SessionEventKind::ObserverObservationRecorded,
+                SessionEventKind::ObserverInterjectionProposed,
+                SessionEventKind::ObserverInterjectionAdmitted,
+            ]
+        );
+
+        remove_file(control_path).ok();
+        remove_file(session_path).ok();
+    }
+
+    #[test]
+    fn unmuted_agent_visible_observer_records_observer_admission_and_turn_admission() {
+        let control_path = temp_path("control");
+        let session_path = temp_path("session");
+        let mut coordinator = RuntimeCoordinator::new(&control_path, &session_path, context());
+
+        append(
+            &control_path,
+            &observer_control_event(
+                "input_observer_agent_visible_1",
+                "agent-visible observer note",
+                "agent_visible",
+            ),
+        );
+        append(&control_path, "\n");
+        let result = coordinator
+            .poll_once(false, &clock())
+            .expect("poll once succeeds");
+
+        assert_eq!(result.admitted_or_queued, 1);
+        assert_eq!(result.evidence_written, 4);
+        assert_eq!(
+            event_kinds(&session_path),
+            vec![
+                SessionEventKind::ObserverObservationRecorded,
+                SessionEventKind::ObserverInterjectionProposed,
+                SessionEventKind::ObserverInterjectionAdmitted,
+                SessionEventKind::InputAdmittedToTurn,
+            ]
+        );
+
+        remove_file(control_path).ok();
+        remove_file(session_path).ok();
+    }
+
+    #[test]
+    fn observer_unmute_restores_conversation_visible_turn_admission() {
+        let control_path = temp_path("control");
+        let session_path = temp_path("session");
+        let mut coordinator = RuntimeCoordinator::new(&control_path, &session_path, context());
+
+        coordinator
+            .handle_operator_submit("/observer mute", &clock())
+            .expect("observer mute succeeds");
+        let unmute = coordinator
+            .handle_operator_submit("/observer unmute", &clock())
+            .expect("observer unmute succeeds");
+        assert_eq!(unmute, RuntimeOperatorSubmitResult::ObserverUnmuted);
+        assert!(!coordinator.observer_interjections_muted());
+
+        append(
+            &control_path,
+            &observer_control_event(
+                "input_observer_fixture_2",
+                "observer note after unmute",
+                "conversation_visible",
+            ),
+        );
+        append(&control_path, "\n");
+        let result = coordinator
+            .poll_once(false, &clock())
+            .expect("poll once succeeds");
+
+        assert_eq!(result.admitted_or_queued, 1);
+        assert_eq!(result.evidence_written, 4);
+        assert_eq!(
+            event_kinds(&session_path),
+            vec![
+                SessionEventKind::CarrierCommandExecuted,
+                SessionEventKind::CarrierCommandExecuted,
+                SessionEventKind::ObserverObservationRecorded,
+                SessionEventKind::ObserverInterjectionProposed,
+                SessionEventKind::ObserverInterjectionAdmitted,
+                SessionEventKind::InputAdmittedToTurn,
+            ]
+        );
 
         remove_file(control_path).ok();
         remove_file(session_path).ok();
@@ -875,6 +1679,9 @@ mod tests {
         coordinator
             .handle_operator_submit("/thinking high", &clock())
             .expect("thinking command succeeds");
+        coordinator
+            .handle_operator_submit("/goal finish carrier parity", &clock())
+            .expect("goal command succeeds");
         let result = coordinator
             .handle_operator_submit("/status", &clock())
             .expect("status command succeeds");
@@ -886,6 +1693,7 @@ mod tests {
                 session: "carrier_fixture_1".to_string(),
                 model: Some("gpt-5.5-mini".to_string()),
                 thinking: Some("high".to_string()),
+                goal: Some("finish carrier parity".to_string()),
                 queued: 0,
                 held: 0,
                 turn_state: "idle".to_string(),

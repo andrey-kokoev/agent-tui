@@ -319,13 +319,15 @@ fn queue_command_feedback_item(
             session,
             model,
             thinking,
+            goal,
             queued,
             held,
             turn_state,
         } => format!(
-            "Identity     {identity}\nSession      {session}\nModel        {}\nThinking     {}\nTurn         {turn_state}\nQueued       {queued}\nHeld         {held}",
+            "Identity     {identity}\nSession      {session}\nModel        {}\nThinking     {}\nGoal         {}\nTurn         {turn_state}\nQueued       {queued}\nHeld         {held}",
             model.clone().unwrap_or_else(|| "unset".to_string()),
-            thinking.clone().unwrap_or_else(|| "unset".to_string())
+            thinking.clone().unwrap_or_else(|| "unset".to_string()),
+            goal.clone().unwrap_or_else(|| "unset".to_string())
         ),
         RuntimeOperatorSubmitResult::StatsShown { output } => output.clone(),
         RuntimeOperatorSubmitResult::ModelShown { value } => {
@@ -347,6 +349,14 @@ fn queue_command_feedback_item(
         RuntimeOperatorSubmitResult::ThinkingRejected { value: _ } => {
             "Usage: /thinking none|low|medium|high".to_string()
         }
+        RuntimeOperatorSubmitResult::GoalShown { value } => {
+            format!(
+                "Current goal: {}",
+                value.clone().unwrap_or_else(|| "unset".to_string())
+            )
+        }
+        RuntimeOperatorSubmitResult::GoalChanged { value } => format!("Goal set to {value}"),
+        RuntimeOperatorSubmitResult::GoalCleared => "Goal cleared".to_string(),
         RuntimeOperatorSubmitResult::ToolOutputShown { shown }
         | RuntimeOperatorSubmitResult::ToolOutputChanged { shown } => format!(
             "Tool call outputs are {} in the displayed transcript.",
@@ -355,6 +365,15 @@ fn queue_command_feedback_item(
         RuntimeOperatorSubmitResult::ToolOutputRejected { value: _ } => {
             "Usage: /tool-output [on|off|toggle|status]".to_string()
         }
+        RuntimeOperatorSubmitResult::ToolsShown { output, .. } => output.clone(),
+        RuntimeOperatorSubmitResult::ObserversShown { output, .. } => output.clone(),
+        RuntimeOperatorSubmitResult::ObserverMuted => {
+            "Observer interjections muted for this session.".to_string()
+        }
+        RuntimeOperatorSubmitResult::ObserverUnmuted => {
+            "Observer interjections unmuted for this session.".to_string()
+        }
+        RuntimeOperatorSubmitResult::LocalMessage { message, .. } => message.clone(),
         RuntimeOperatorSubmitResult::ClearDisplay => "cleared".to_string(),
         RuntimeOperatorSubmitResult::Exit => "exiting".to_string(),
         RuntimeOperatorSubmitResult::UnknownCommand { command } => {
@@ -397,6 +416,7 @@ fn help_text() -> String {
         "/stats [args]         Show local Codex transcript statistics",
         "/model <name>         Set model for later turns",
         "/thinking <level>     none, low, medium, high",
+        "/goal [text|clear]    Show or set carrier session goal",
         "/tool-output [state]  Toggle displayed tool call outputs (on, off, toggle)",
         "/queue                Show queued carrier input",
         "/queue clear          Clear queued operator steering",
@@ -931,6 +951,7 @@ mod tests {
                 session: "carrier_fixture_1".to_string(),
                 model: Some("gpt-5.5-mini".to_string()),
                 thinking: Some("high".to_string()),
+                goal: Some("finish carrier parity".to_string()),
                 queued: 0,
                 held: 0,
                 turn_state: "idle".to_string(),
@@ -941,6 +962,7 @@ mod tests {
 
         assert!(item.text.contains("Model        gpt-5.5-mini"));
         assert!(item.text.contains("Thinking     high"));
+        assert!(item.text.contains("Goal         finish carrier parity"));
     }
 
     #[test]

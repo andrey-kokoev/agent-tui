@@ -1,6 +1,7 @@
 pub mod app_view_model;
 pub mod carrier_command;
 pub mod carrier_command_contract;
+pub mod carrier_input_pipeline_contract;
 pub mod carrier_protocol;
 pub mod carrier_protocol_contract;
 pub mod composer_draft;

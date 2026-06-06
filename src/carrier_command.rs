@@ -2,10 +2,15 @@
 pub enum CarrierCommand {
     Help,
     Status,
+    Goal { value: Option<String> },
     Stats { value: Option<String> },
     Model { value: Option<String> },
     Thinking { value: Option<String> },
     ToolOutput { value: Option<String> },
+    Tools { value: Option<String> },
+    Observers,
+    ObserverMute,
+    ObserverUnmute,
     Clear,
     Exit,
     QueueShow,
@@ -46,6 +51,9 @@ pub fn parse_operator_submit(text: &str) -> OperatorSubmit {
     match command_name {
         "help" => OperatorSubmit::CarrierCommand(CarrierCommand::Help),
         "status" => OperatorSubmit::CarrierCommand(CarrierCommand::Status),
+        "goal" => OperatorSubmit::CarrierCommand(CarrierCommand::Goal {
+            value: nonempty_value(value),
+        }),
         "stats" => OperatorSubmit::CarrierCommand(CarrierCommand::Stats {
             value: nonempty_value(value),
         }),
@@ -58,6 +66,12 @@ pub fn parse_operator_submit(text: &str) -> OperatorSubmit {
         "tool_output" => OperatorSubmit::CarrierCommand(CarrierCommand::ToolOutput {
             value: nonempty_value(value),
         }),
+        "tools" => OperatorSubmit::CarrierCommand(CarrierCommand::Tools {
+            value: nonempty_value(value),
+        }),
+        "observers" => OperatorSubmit::CarrierCommand(CarrierCommand::Observers),
+        "observer_mute" => OperatorSubmit::CarrierCommand(CarrierCommand::ObserverMute),
+        "observer_unmute" => OperatorSubmit::CarrierCommand(CarrierCommand::ObserverUnmute),
         "clear" => OperatorSubmit::CarrierCommand(CarrierCommand::Clear),
         "exit" => OperatorSubmit::CarrierCommand(CarrierCommand::Exit),
         "queue_show" => parse_queue_command(&value),
@@ -159,11 +173,17 @@ mod tests {
             vec![
                 "/help",
                 "/status",
+                "/goal",
                 "/stats",
                 "/model",
                 "/thinking",
                 "/tool-output",
                 "/tool-outputs",
+                "/tools",
+                "/tool",
+                "/observers",
+                "/observer mute",
+                "/observer unmute",
                 "/queue",
                 "/queue clear",
                 "/queue drop <index>",
@@ -181,6 +201,12 @@ mod tests {
         assert_eq!(
             parse_operator_submit("/status"),
             OperatorSubmit::CarrierCommand(CarrierCommand::Status)
+        );
+        assert_eq!(
+            parse_operator_submit("/goal finish the carrier contract"),
+            OperatorSubmit::CarrierCommand(CarrierCommand::Goal {
+                value: Some("finish the carrier contract".to_string())
+            })
         );
         assert_eq!(
             parse_operator_submit("/stats --date 2026-06-01 --top 3"),
@@ -209,6 +235,28 @@ mod tests {
         assert_eq!(
             parse_operator_submit("/tool-outputs"),
             OperatorSubmit::CarrierCommand(CarrierCommand::ToolOutput { value: None })
+        );
+        assert_eq!(
+            parse_operator_submit("/tools mcp"),
+            OperatorSubmit::CarrierCommand(CarrierCommand::Tools {
+                value: Some("mcp".to_string())
+            })
+        );
+        assert_eq!(
+            parse_operator_submit("/tool"),
+            OperatorSubmit::CarrierCommand(CarrierCommand::Tools { value: None })
+        );
+        assert_eq!(
+            parse_operator_submit("/observers"),
+            OperatorSubmit::CarrierCommand(CarrierCommand::Observers)
+        );
+        assert_eq!(
+            parse_operator_submit("/observer mute"),
+            OperatorSubmit::CarrierCommand(CarrierCommand::ObserverMute)
+        );
+        assert_eq!(
+            parse_operator_submit("/observer unmute"),
+            OperatorSubmit::CarrierCommand(CarrierCommand::ObserverUnmute)
         );
         assert_eq!(
             parse_operator_submit("/clear"),

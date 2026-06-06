@@ -5,10 +5,10 @@ pub use crate::carrier_protocol_contract::{
     completed_turn_terminal_status_is_valid, control_event_id_prefix, control_input_event_schema,
     delivery_mode_is_valid, diagnostic_level_is_valid, failed_turn_terminal_status_is_valid,
     input_event_id_prefix, input_event_schema, interrupted_turn_terminal_status_is_valid,
-    payload_policy_schema, payload_ref_schema, provider_output_payload_schema,
-    provider_request_payload_schema, session_event_fixture_manifest_schema,
-    session_event_id_prefix, session_event_schema, terminal_state_is_valid,
-    turn_terminal_payload_schema,
+    observer_muted_suppression_reason, observer_visibility_is_valid, payload_policy_schema,
+    payload_ref_schema, provider_output_payload_schema, provider_request_payload_schema,
+    session_event_fixture_manifest_schema, session_event_id_prefix, session_event_schema,
+    terminal_state_is_valid, turn_terminal_payload_schema,
 };
 use crate::operator_routing_contract::{output_reader_tool_name, payload_reader_tools};
 
@@ -66,6 +66,16 @@ pub enum SessionEventKind {
     InterruptRequested,
     ToolCallRequested,
     ToolResultReceived,
+    ObserverObservationRecorded,
+    ObserverInterjectionProposed,
+    ObserverInterjectionAdmitted,
+    ObserverInterjectionSuppressed,
+    CarrierHostCommandRequested,
+    CarrierHostCommandAdmitted,
+    CarrierHostCommandRejected,
+    CarrierHostCommandStarted,
+    CarrierHostCommandCompleted,
+    CarrierHostCommandFailed,
     CarrierCommandExecuted,
     CarrierDiagnosticRecorded,
 }
@@ -90,6 +100,16 @@ pub const SESSION_EVENT_KINDS: &[SessionEventKind] = &[
     SessionEventKind::InterruptRequested,
     SessionEventKind::ToolCallRequested,
     SessionEventKind::ToolResultReceived,
+    SessionEventKind::ObserverObservationRecorded,
+    SessionEventKind::ObserverInterjectionProposed,
+    SessionEventKind::ObserverInterjectionAdmitted,
+    SessionEventKind::ObserverInterjectionSuppressed,
+    SessionEventKind::CarrierHostCommandRequested,
+    SessionEventKind::CarrierHostCommandAdmitted,
+    SessionEventKind::CarrierHostCommandRejected,
+    SessionEventKind::CarrierHostCommandStarted,
+    SessionEventKind::CarrierHostCommandCompleted,
+    SessionEventKind::CarrierHostCommandFailed,
     SessionEventKind::CarrierCommandExecuted,
     SessionEventKind::CarrierDiagnosticRecorded,
 ];
@@ -217,7 +237,9 @@ fn validate_input_event(event: &InputEvent) -> Result<(), String> {
     }
     match event.source_kind {
         SourceKind::Agent => {
-            if event.metadata.get("agent_control_input") != Some(&Value::Bool(true)) {
+            if event.metadata.get("agent_control_input") != Some(&Value::Bool(true))
+                && !is_observer_input_event(event)
+            {
                 return Err("agent_source_requires_agent_control_input_metadata".to_string());
             }
         }
@@ -245,6 +267,20 @@ fn validate_input_event(event: &InputEvent) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+pub fn is_observer_input_event(event: &InputEvent) -> bool {
+    let Some(observer) = event.metadata.get("observer") else {
+        return false;
+    };
+    observer.get("role").and_then(Value::as_str) == Some("observer")
+        && is_observer_source_id(&event.source_id)
+}
+
+fn is_observer_source_id(source_id: &str) -> bool {
+    source_id == "narada.observer"
+        || source_id.starts_with("narada.observer.")
+        || source_id.ends_with(".observer")
 }
 
 fn validate_control_input_event(event: &ControlInputEvent) -> Result<(), String> {
@@ -413,6 +449,28 @@ fn validate_session_payload(kind: &SessionEventKind, payload: &Value) -> Result<
         SessionEventKind::InterruptRequested => require_payload_fields(payload, &["turn_id"]),
         SessionEventKind::ToolCallRequested => validate_tool_call_payload(payload),
         SessionEventKind::ToolResultReceived => validate_tool_result_payload(payload),
+        SessionEventKind::ObserverObservationRecorded
+        | SessionEventKind::ObserverInterjectionProposed
+        | SessionEventKind::ObserverInterjectionAdmitted => {
+            validate_observer_payload(payload, false)
+        }
+        SessionEventKind::ObserverInterjectionSuppressed => {
+            validate_observer_payload(payload, true)
+        }
+        SessionEventKind::CarrierHostCommandRequested => {
+            validate_carrier_host_command_request_payload(payload)
+        }
+        SessionEventKind::CarrierHostCommandAdmitted
+        | SessionEventKind::CarrierHostCommandRejected => {
+            validate_carrier_host_command_admission_payload(payload)
+        }
+        SessionEventKind::CarrierHostCommandStarted => {
+            validate_carrier_host_command_started_payload(payload)
+        }
+        SessionEventKind::CarrierHostCommandCompleted
+        | SessionEventKind::CarrierHostCommandFailed => {
+            validate_carrier_host_command_terminal_payload(payload)
+        }
         SessionEventKind::CarrierCommandExecuted => require_payload_fields(payload, &["command"]),
         SessionEventKind::CarrierDiagnosticRecorded => validate_carrier_diagnostic_payload(payload),
         SessionEventKind::ProviderRequestRecorded => validate_provider_request_payload(payload),
@@ -422,6 +480,88 @@ fn validate_session_payload(kind: &SessionEventKind, payload: &Value) -> Result<
         SessionEventKind::ProviderToolCallRequested => {
             validate_provider_output_payload("tool_call_request", payload)
         }
+    }
+}
+
+fn validate_carrier_host_command_request_payload(payload: &Value) -> Result<(), String> {
+    validate_carrier_host_command_base_payload(payload)
+}
+
+fn validate_carrier_host_command_admission_payload(payload: &Value) -> Result<(), String> {
+    validate_carrier_host_command_base_payload(payload)?;
+    require_payload_nonempty_string(payload, "admission_action")?;
+    require_payload_nonempty_string(payload, "admission_reason")?;
+    require_optional_string(payload, "terminal_state")
+}
+
+fn validate_carrier_host_command_started_payload(payload: &Value) -> Result<(), String> {
+    require_payload_fields(payload, &["command_id", "started_at"])?;
+    require_payload_nonempty_string(payload, "command_id")?;
+    require_payload_rfc3339(payload, "started_at")
+}
+
+fn validate_carrier_host_command_terminal_payload(payload: &Value) -> Result<(), String> {
+    require_payload_fields(
+        payload,
+        &[
+            "command_id",
+            "command_text",
+            "command_summary",
+            "redaction_applied",
+            "working_directory",
+            "exit_code",
+            "terminal_state",
+            "duration_ms",
+            "output_truncated",
+            "stdout",
+            "stderr",
+        ],
+    )?;
+    validate_carrier_host_command_base_payload(payload)?;
+    require_payload_nonnegative_integer(payload, "exit_code")?;
+    require_terminal_state(payload, "terminal_state")?;
+    require_payload_nonnegative_number(payload, "duration_ms")?;
+    require_payload_bool(payload, "output_truncated")?;
+    require_payload_string(payload, "stdout")?;
+    require_payload_string(payload, "stderr")
+}
+
+fn validate_carrier_host_command_base_payload(payload: &Value) -> Result<(), String> {
+    require_payload_fields(
+        payload,
+        &[
+            "command_id",
+            "command_text",
+            "command_summary",
+            "redaction_applied",
+            "working_directory",
+        ],
+    )?;
+    require_payload_nonempty_string(payload, "command_id")?;
+    require_payload_string(payload, "command_text")?;
+    require_payload_string(payload, "command_summary")?;
+    require_payload_bool(payload, "redaction_applied")?;
+    require_payload_string(payload, "working_directory")
+}
+
+fn validate_observer_payload(payload: &Value, suppression_required: bool) -> Result<(), String> {
+    require_payload_fields(
+        payload,
+        &["observer_id", "rule_id", "visibility", "content"],
+    )?;
+    require_payload_nonempty_string(payload, "observer_id")?;
+    require_payload_nonempty_string(payload, "rule_id")?;
+    require_observer_visibility(payload, "visibility")?;
+    require_payload_string(payload, "content")?;
+    require_optional_nonempty_string(payload, "input_event_id")?;
+    require_optional_string(payload, "confidence")?;
+    if suppression_required {
+        match payload.get("suppression_reason").and_then(Value::as_str) {
+            Some(reason) if reason == observer_muted_suppression_reason() => Ok(()),
+            _ => Err("payload.invalid_suppression_reason".to_string()),
+        }
+    } else {
+        require_optional_string(payload, "suppression_reason")
     }
 }
 
@@ -665,6 +805,13 @@ fn require_payload_nonempty_string(payload: &Value, field: &str) -> Result<(), S
     }
 }
 
+fn require_payload_bool(payload: &Value, field: &str) -> Result<(), String> {
+    match payload.get(field) {
+        Some(Value::Bool(_)) => Ok(()),
+        _ => Err(format!("payload.invalid_{field}")),
+    }
+}
+
 fn require_payload_nonnegative_number(payload: &Value, field: &str) -> Result<(), String> {
     match payload.get(field).and_then(Value::as_f64) {
         Some(value) if value >= 0.0 => Ok(()),
@@ -696,6 +843,13 @@ fn require_delivery_mode(payload: &Value, field: &str) -> Result<(), String> {
 fn require_terminal_state(payload: &Value, field: &str) -> Result<(), String> {
     match payload.get(field).and_then(Value::as_str) {
         Some(value) if terminal_state_is_valid(value) => Ok(()),
+        _ => Err(format!("payload.invalid_{field}")),
+    }
+}
+
+fn require_observer_visibility(payload: &Value, field: &str) -> Result<(), String> {
+    match payload.get(field).and_then(Value::as_str) {
+        Some(value) if observer_visibility_is_valid(value) => Ok(()),
         _ => Err(format!("payload.invalid_{field}")),
     }
 }

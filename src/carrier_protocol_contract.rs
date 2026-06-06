@@ -15,6 +15,12 @@ pub struct CarrierProtocolContract {
     pub turn_terminal_status: CarrierProtocolTurnTerminalStatus,
     pub terminal_state: CarrierProtocolTerminalState,
     pub delivery_mode: CarrierProtocolDeliveryMode,
+    pub observer_visibility: CarrierProtocolObserverVisibility,
+    pub queue_state: CarrierProtocolQueueState,
+    pub input_admission_action: CarrierProtocolInputAdmissionAction,
+    pub input_hold_action: CarrierProtocolInputHoldAction,
+    pub observer_suppression_reason: CarrierProtocolObserverSuppressionReason,
+    pub input_pipeline_event_kind: CarrierProtocolInputPipelineEventKind,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -61,6 +67,41 @@ pub struct CarrierProtocolDeliveryMode {
     pub values: Vec<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CarrierProtocolObserverVisibility {
+    pub values: Vec<String>,
+    pub default: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CarrierProtocolQueueState {
+    pub values: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CarrierProtocolInputAdmissionAction {
+    pub values: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CarrierProtocolInputHoldAction {
+    pub values: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CarrierProtocolObserverSuppressionReason {
+    pub values: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CarrierProtocolInputPipelineEventKind {
+    pub queue: Vec<String>,
+    pub admission: Vec<String>,
+    pub visible: Vec<String>,
+    pub hold: Vec<String>,
+    pub release: Vec<String>,
+}
+
 static CARRIER_PROTOCOL_CONTRACT: OnceLock<CarrierProtocolContract> = OnceLock::new();
 
 pub fn carrier_protocol_contract() -> &'static CarrierProtocolContract {
@@ -99,6 +140,29 @@ pub fn parse_carrier_protocol_contract(json_text: &str) -> Result<CarrierProtoco
     }
     if contract.delivery_mode.values.is_empty() {
         return Err("carrier_protocol_contract_invalid:delivery_mode".to_string());
+    }
+    if contract.observer_visibility.values.is_empty()
+        || contract.observer_visibility.default.is_empty()
+    {
+        return Err("carrier_protocol_contract_invalid:observer_visibility".to_string());
+    }
+    if contract.queue_state.values.is_empty() {
+        return Err("carrier_protocol_contract_invalid:queue_state".to_string());
+    }
+    if contract.input_admission_action.values.is_empty() {
+        return Err("carrier_protocol_contract_invalid:input_admission_action".to_string());
+    }
+    if contract.input_hold_action.values.is_empty() {
+        return Err("carrier_protocol_contract_invalid:input_hold_action".to_string());
+    }
+    if contract.observer_suppression_reason.values.is_empty() {
+        return Err("carrier_protocol_contract_invalid:observer_suppression_reason".to_string());
+    }
+    if contract.input_pipeline_event_kind.queue.is_empty()
+        || contract.input_pipeline_event_kind.admission.is_empty()
+        || contract.input_pipeline_event_kind.hold.is_empty()
+    {
+        return Err("carrier_protocol_contract_invalid:input_pipeline_event_kind".to_string());
     }
     Ok(contract)
 }
@@ -231,6 +295,70 @@ pub fn delivery_mode_is_valid(value: &str) -> bool {
         .any(|candidate| candidate == value)
 }
 
+pub fn observer_visibility_default() -> &'static str {
+    carrier_protocol_contract()
+        .observer_visibility
+        .default
+        .as_str()
+}
+
+pub fn observer_visibility_values() -> &'static [String] {
+    carrier_protocol_contract()
+        .observer_visibility
+        .values
+        .as_slice()
+}
+
+pub fn observer_visibility_is_valid(value: &str) -> bool {
+    carrier_protocol_contract()
+        .observer_visibility
+        .values
+        .iter()
+        .any(|candidate| candidate == value)
+}
+
+pub fn queue_state_is_valid(value: &str) -> bool {
+    carrier_protocol_contract()
+        .queue_state
+        .values
+        .iter()
+        .any(|candidate| candidate == value)
+}
+
+pub fn input_admission_action_is_valid(value: &str) -> bool {
+    carrier_protocol_contract()
+        .input_admission_action
+        .values
+        .iter()
+        .any(|candidate| candidate == value)
+}
+
+pub fn input_hold_action_is_valid(value: &str) -> bool {
+    carrier_protocol_contract()
+        .input_hold_action
+        .values
+        .iter()
+        .any(|candidate| candidate == value)
+}
+
+pub fn observer_suppression_reason_is_valid(value: &str) -> bool {
+    carrier_protocol_contract()
+        .observer_suppression_reason
+        .values
+        .iter()
+        .any(|candidate| candidate == value)
+}
+
+pub fn observer_muted_suppression_reason() -> &'static str {
+    carrier_protocol_contract()
+        .observer_suppression_reason
+        .values
+        .iter()
+        .find(|value| value.as_str() == "observer_muted")
+        .expect("carrier protocol contract must define observer_muted")
+        .as_str()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,5 +382,21 @@ mod tests {
         assert!(failed_turn_terminal_status_is_valid("failed"));
         assert!(terminal_state_is_valid("completed"));
         assert!(delivery_mode_is_valid("admit_after_active_turn"));
+        assert_eq!(observer_visibility_default(), "operator_visible");
+        assert!(observer_visibility_is_valid("conversation_visible"));
+        assert!(queue_state_is_valid("queued_for_turn_boundary"));
+        assert!(input_admission_action_is_valid("admit"));
+        assert!(input_hold_action_is_valid("release"));
+        assert!(observer_suppression_reason_is_valid("observer_muted"));
+        assert_eq!(
+            contract.input_pipeline_event_kind.queue,
+            vec!["input_queued_for_turn_boundary".to_string()]
+        );
+        assert!(
+            contract
+                .input_pipeline_event_kind
+                .admission
+                .contains(&"observer_interjection_suppressed".to_string())
+        );
     }
 }
