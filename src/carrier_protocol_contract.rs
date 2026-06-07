@@ -20,7 +20,34 @@ pub struct CarrierProtocolContract {
     pub input_admission_action: CarrierProtocolInputAdmissionAction,
     pub input_hold_action: CarrierProtocolInputHoldAction,
     pub observer_suppression_reason: CarrierProtocolObserverSuppressionReason,
+    pub tool_result_status: CarrierProtocolToolResultStatus,
+    pub tool_effect_admission_action: CarrierProtocolToolEffectAdmissionAction,
+    pub tool_effect_admission_reason: CarrierProtocolToolEffectAdmissionReason,
     pub input_pipeline_event_kind: CarrierProtocolInputPipelineEventKind,
+}
+
+pub fn tool_result_status_is_valid(value: &str) -> bool {
+    carrier_protocol_contract()
+        .tool_result_status
+        .values
+        .iter()
+        .any(|candidate| candidate == value)
+}
+
+pub fn tool_effect_admission_action_is_valid(value: &str) -> bool {
+    carrier_protocol_contract()
+        .tool_effect_admission_action
+        .values
+        .iter()
+        .any(|candidate| candidate == value)
+}
+
+pub fn tool_effect_admission_reason_is_valid(value: &str) -> bool {
+    carrier_protocol_contract()
+        .tool_effect_admission_reason
+        .values
+        .iter()
+        .any(|candidate| candidate == value)
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -94,6 +121,21 @@ pub struct CarrierProtocolObserverSuppressionReason {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CarrierProtocolToolResultStatus {
+    pub values: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CarrierProtocolToolEffectAdmissionAction {
+    pub values: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CarrierProtocolToolEffectAdmissionReason {
+    pub values: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CarrierProtocolInputPipelineEventKind {
     pub queue: Vec<String>,
     pub admission: Vec<String>,
@@ -157,6 +199,15 @@ pub fn parse_carrier_protocol_contract(json_text: &str) -> Result<CarrierProtoco
     }
     if contract.observer_suppression_reason.values.is_empty() {
         return Err("carrier_protocol_contract_invalid:observer_suppression_reason".to_string());
+    }
+    if contract.tool_result_status.values.is_empty() {
+        return Err("carrier_protocol_contract_invalid:tool_result_status".to_string());
+    }
+    if contract.tool_effect_admission_action.values.is_empty() {
+        return Err("carrier_protocol_contract_invalid:tool_effect_admission_action".to_string());
+    }
+    if contract.tool_effect_admission_reason.values.is_empty() {
+        return Err("carrier_protocol_contract_invalid:tool_effect_admission_reason".to_string());
     }
     if contract.input_pipeline_event_kind.queue.is_empty()
         || contract.input_pipeline_event_kind.admission.is_empty()
@@ -388,6 +439,11 @@ mod tests {
         assert!(input_admission_action_is_valid("admit"));
         assert!(input_hold_action_is_valid("release"));
         assert!(observer_suppression_reason_is_valid("observer_muted"));
+        assert!(tool_result_status_is_valid("denied"));
+        assert!(tool_effect_admission_action_is_valid("deny"));
+        assert!(tool_effect_admission_reason_is_valid(
+            "tool_effect_admission_required"
+        ));
         assert_eq!(
             contract.input_pipeline_event_kind.queue,
             vec!["input_queued_for_turn_boundary".to_string()]

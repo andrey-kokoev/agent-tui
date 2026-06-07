@@ -8,7 +8,9 @@ pub use crate::carrier_protocol_contract::{
     observer_muted_suppression_reason, observer_visibility_is_valid, payload_policy_schema,
     payload_ref_schema, provider_output_payload_schema, provider_request_payload_schema,
     session_event_fixture_manifest_schema, session_event_id_prefix, session_event_schema,
-    terminal_state_is_valid, turn_terminal_payload_schema,
+    terminal_state_is_valid, tool_effect_admission_action_is_valid,
+    tool_effect_admission_reason_is_valid, tool_result_status_is_valid,
+    turn_terminal_payload_schema,
 };
 use crate::operator_routing_contract::{output_reader_tool_name, payload_reader_tools};
 
@@ -47,6 +49,7 @@ pub enum HoldCondition {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionEventKind {
+    CarrierSessionStarted,
     InputQueuedForTurnBoundary,
     InputAdmittedToTurn,
     InputDroppedByOperator,
@@ -69,6 +72,7 @@ pub enum SessionEventKind {
     ObserverObservationRecorded,
     ObserverInterjectionProposed,
     ObserverInterjectionAdmitted,
+    ObserverInterjectionVisible,
     ObserverInterjectionSuppressed,
     CarrierHostCommandRequested,
     CarrierHostCommandAdmitted,
@@ -78,9 +82,11 @@ pub enum SessionEventKind {
     CarrierHostCommandFailed,
     CarrierCommandExecuted,
     CarrierDiagnosticRecorded,
+    CarrierSessionClosed,
 }
 
 pub const SESSION_EVENT_KINDS: &[SessionEventKind] = &[
+    SessionEventKind::CarrierSessionStarted,
     SessionEventKind::InputQueuedForTurnBoundary,
     SessionEventKind::InputAdmittedToTurn,
     SessionEventKind::InputDroppedByOperator,
@@ -103,6 +109,7 @@ pub const SESSION_EVENT_KINDS: &[SessionEventKind] = &[
     SessionEventKind::ObserverObservationRecorded,
     SessionEventKind::ObserverInterjectionProposed,
     SessionEventKind::ObserverInterjectionAdmitted,
+    SessionEventKind::ObserverInterjectionVisible,
     SessionEventKind::ObserverInterjectionSuppressed,
     SessionEventKind::CarrierHostCommandRequested,
     SessionEventKind::CarrierHostCommandAdmitted,
@@ -112,6 +119,7 @@ pub const SESSION_EVENT_KINDS: &[SessionEventKind] = &[
     SessionEventKind::CarrierHostCommandFailed,
     SessionEventKind::CarrierCommandExecuted,
     SessionEventKind::CarrierDiagnosticRecorded,
+    SessionEventKind::CarrierSessionClosed,
 ];
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -416,6 +424,15 @@ pub fn create_turn_terminal_payload(
 
 fn validate_session_payload(kind: &SessionEventKind, payload: &Value) -> Result<(), String> {
     match kind {
+        SessionEventKind::CarrierSessionStarted => require_payload_fields(
+            payload,
+            &[
+                "carrier_kind",
+                "carrier_host",
+                "protocol_version",
+                "runtime_contract_version",
+            ],
+        ),
         SessionEventKind::InputQueuedForTurnBoundary => {
             require_payload_fields(payload, &["input_event_id", "queue_state"])
         }
@@ -451,7 +468,8 @@ fn validate_session_payload(kind: &SessionEventKind, payload: &Value) -> Result<
         SessionEventKind::ToolResultReceived => validate_tool_result_payload(payload),
         SessionEventKind::ObserverObservationRecorded
         | SessionEventKind::ObserverInterjectionProposed
-        | SessionEventKind::ObserverInterjectionAdmitted => {
+        | SessionEventKind::ObserverInterjectionAdmitted
+        | SessionEventKind::ObserverInterjectionVisible => {
             validate_observer_payload(payload, false)
         }
         SessionEventKind::ObserverInterjectionSuppressed => {
@@ -473,6 +491,7 @@ fn validate_session_payload(kind: &SessionEventKind, payload: &Value) -> Result<
         }
         SessionEventKind::CarrierCommandExecuted => require_payload_fields(payload, &["command"]),
         SessionEventKind::CarrierDiagnosticRecorded => validate_carrier_diagnostic_payload(payload),
+        SessionEventKind::CarrierSessionClosed => Ok(()),
         SessionEventKind::ProviderRequestRecorded => validate_provider_request_payload(payload),
         SessionEventKind::ProviderTextDeltaRecorded => {
             validate_provider_output_payload("text_delta", payload)
@@ -702,11 +721,57 @@ fn validate_tool_result_payload(payload: &Value) -> Result<(), String> {
         &["tool_name", "status", "duration_ms", "result_summary"],
     )?;
     require_payload_nonempty_string(payload, "tool_name")?;
-    require_payload_nonempty_string(payload, "status")?;
+    require_tool_result_status(payload, "status")?;
     require_payload_nonnegative_number(payload, "duration_ms")?;
     require_payload_string(payload, "result_summary")?;
     require_optional_string(payload, "result_text")?;
+    validate_tool_result_admission_evidence(payload)?;
     validate_optional_payload_ref(payload, "result_ref")
+}
+
+fn validate_tool_result_admission_evidence(payload: &Value) -> Result<(), String> {
+    let action = payload.get("admission_action").and_then(Value::as_str);
+    let reason = payload.get("admission_reason").and_then(Value::as_str);
+    match (action, reason) {
+        (None, None) => return Ok(()),
+        (Some(_), None) => return Err("payload.missing_admission_reason".to_string()),
+        (None, Some(_)) => return Err("payload.missing_admission_action".to_string()),
+        (Some(action), Some(reason)) => {
+            if !tool_effect_admission_action_is_valid(action) {
+                return Err(format!("payload.invalid_admission_action:{action}"));
+            }
+            if !tool_effect_admission_reason_is_valid(reason) {
+                return Err(format!("payload.invalid_admission_reason:{reason}"));
+            }
+            let status = payload.get("status").and_then(Value::as_str).unwrap_or("");
+            if action == "deny" && status != "denied" {
+                return Err("payload.admission_action_status_mismatch".to_string());
+            }
+            if action == "admit" && status == "denied" {
+                return Err("payload.admission_action_status_mismatch".to_string());
+            }
+            let deny_reasons = [
+                "tool_effect_adapter_unconfigured",
+                "tool_effect_admission_required",
+                "unsupported_tool_effect",
+                "tool_effect_authority_denied",
+            ];
+            let admit_reasons = [
+                "read_only_tool_effect_admitted",
+                "write_tool_effect_admitted",
+            ];
+            if action == "admit" && deny_reasons.contains(&reason) {
+                return Err("payload.admission_reason_action_mismatch".to_string());
+            }
+            if action == "deny" && admit_reasons.contains(&reason) {
+                return Err("payload.admission_reason_action_mismatch".to_string());
+            }
+        }
+    }
+    for field in ["capability_ref", "effect_scope", "authority_ref"] {
+        require_optional_nonempty_string(payload, field)?;
+    }
+    Ok(())
 }
 
 fn validate_carrier_diagnostic_payload(payload: &Value) -> Result<(), String> {
@@ -852,6 +917,13 @@ fn require_delivery_mode(payload: &Value, field: &str) -> Result<(), String> {
 fn require_terminal_state(payload: &Value, field: &str) -> Result<(), String> {
     match payload.get(field).and_then(Value::as_str) {
         Some(value) if terminal_state_is_valid(value) => Ok(()),
+        _ => Err(format!("payload.invalid_{field}")),
+    }
+}
+
+fn require_tool_result_status(payload: &Value, field: &str) -> Result<(), String> {
+    match payload.get(field).and_then(Value::as_str) {
+        Some(value) if tool_result_status_is_valid(value) => Ok(()),
         _ => Err(format!("payload.invalid_{field}")),
     }
 }
@@ -1378,6 +1450,36 @@ mod tests {
         assert_eq!(tool_result.event_kind, SessionEventKind::ToolResultReceived);
         assert_eq!(tool_result.payload["tool_name"], "site_loop_run_once");
         assert_eq!(tool_result.payload["status"], "ok");
+
+        for fixture in [
+            "tool-result-admitted-session-event.json",
+            "tool-result-denied-session-event.json",
+            "tool-result-failed-session-event.json",
+        ] {
+            let event = parse_session_event(&read_shared_session_event_fixture(fixture))
+                .expect("shared tool result fixture parses");
+            assert_eq!(event.event_kind, SessionEventKind::ToolResultReceived);
+        }
+
+        let mut invalid_status = tool_result.clone();
+        invalid_status.payload["status"] = json!("admission_required");
+        assert_eq!(
+            validate_session_payload(
+                &SessionEventKind::ToolResultReceived,
+                &invalid_status.payload
+            ),
+            Err("payload.invalid_status".to_string())
+        );
+
+        let mut invalid_admission_pair = tool_result;
+        invalid_admission_pair.payload["admission_action"] = json!("deny");
+        assert_eq!(
+            validate_session_payload(
+                &SessionEventKind::ToolResultReceived,
+                &invalid_admission_pair.payload,
+            ),
+            Err("payload.missing_admission_reason".to_string())
+        );
     }
 
     #[test]
