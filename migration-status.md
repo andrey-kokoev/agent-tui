@@ -220,14 +220,14 @@ narada-proper agent-cli: D:\code\narada\.narada\crew\agent-start-results\agent_s
 narada-proper agent-tui: D:\code\narada\.narada\crew\agent-start-results\agent_start_20260531_041426614_narada_architect.result.json
 narada-andrey agent-cli: C:\Users\Andrey\Narada\.ai\runtime\agent-start-results\evt-2026-05-31_00-04-19_e5147cef.result.json
 narada-andrey agent-tui: C:\Users\Andrey\Narada\.ai\runtime\agent-start-results\evt-2026-05-31_04-27-29_a23016ab.result.json
-narada-staccato agent-cli: C:\Users\Andrey\OneDrive - Global Maxima LLC\!Business\!Clients\Staccato\.narada\.ai\runtime\agent-start-results\evt-2026-05-31_00-04-20_131e872d.result.json
-narada-staccato agent-tui: C:\Users\Andrey\OneDrive - Global Maxima LLC\!Business\!Clients\Staccato\.narada\.ai\runtime\agent-start-results\evt-2026-05-31_05-04-35_975e949a.result.json
-narada-revolution agent-cli: C:\Users\Andrey\OneDrive - Global Maxima LLC\!Business\!Clients\!Revolution\.narada\.ai\runtime\agent-start-results\evt-2026-05-31_00-04-22_c13890e1.result.json
-narada-revolution agent-tui: C:\Users\Andrey\OneDrive - Global Maxima LLC\!Business\!Clients\!Revolution\.narada\.ai\runtime\agent-start-results\evt-2026-05-31_05-04-38_77515bed.result.json
+narada-staccato agent-cli: D:\code\narada.staccato\.narada\.ai\runtime\agent-start-results\evt-2026-05-31_00-04-20_131e872d.result.json
+narada-staccato agent-tui: D:\code\narada.staccato\.narada\.ai\runtime\agent-start-results\evt-2026-05-31_05-04-35_975e949a.result.json
+narada-revolution agent-cli: D:\code\narada.revolution\.ai\runtime\agent-start-results\evt-2026-05-31_00-04-22_c13890e1.result.json
+narada-revolution agent-tui: D:\code\narada.revolution\.ai\runtime\agent-start-results\evt-2026-05-31_05-04-38_77515bed.result.json
 narada-timour-marketing-agent agent-cli: C:\Users\Andrey\Vose Software BE\Timour Koupeev - MarketingAgent\.narada\.ai\runtime\agent-start-results\evt-2026-05-31_00-04-23_466ee6d9.result.json
 narada-timour-marketing-agent agent-tui: C:\Users\Andrey\Vose Software BE\Timour Koupeev - MarketingAgent\.narada\.ai\runtime\agent-start-results\evt-2026-05-31_05-04-41_c370a882.result.json
-narada-utz agent-cli: C:\Users\Andrey\OneDrive - Global Maxima LLC\!Business\!Clients\Utz\.narada\.ai\runtime\agent-start-results\evt-2026-05-31_00-04-24_747be7a9.result.json
-narada-utz agent-tui: C:\Users\Andrey\OneDrive - Global Maxima LLC\!Business\!Clients\Utz\.narada\.ai\runtime\agent-start-results\evt-2026-05-31_05-04-44_fc733c37.result.json
+narada-utz agent-cli: D:\code\narada.utz\.narada\.ai\runtime\agent-start-results\evt-2026-05-31_00-04-24_747be7a9.result.json
+narada-utz agent-tui: D:\code\narada.utz\.narada\.ai\runtime\agent-start-results\evt-2026-05-31_05-04-44_fc733c37.result.json
 narada-sonar agent-cli: D:\code\narada.sonar\.ai\runtime\agent-start-results\evt-2026-05-31_00-04-25_28290811.result.json
 narada-sonar agent-tui: D:\code\narada.sonar\.ai\runtime\agent-start-results\evt-2026-05-31_05-04-28_cb53f734.result.json
 smart-scheduling agent-cli: D:\code\smart-scheduling\.narada\.ai\runtime\agent-start-results\evt-2026-05-31_00-04-26_b975144f.result.json
@@ -245,10 +245,10 @@ The following Site-local launcher copies are outside the Narada proper Git repos
 ```text
 sha256: 3f25e2dbd6e65b47174af8b606fae3277a4882ecdcdc285702afe9ebdd532340
 
-C:\Users\Andrey\OneDrive - Global Maxima LLC\!Business\!Clients\Staccato\.narada\tools\agent-start\start-agent.mjs
-C:\Users\Andrey\OneDrive - Global Maxima LLC\!Business\!Clients\!Revolution\.narada\tools\agent-start\start-agent.mjs
+D:\code\narada.staccato\.narada\tools\agent-start\start-agent.mjs
+D:\code\narada.revolution\tools\agent-start\start-agent.mjs
 C:\Users\Andrey\Vose Software BE\Timour Koupeev - MarketingAgent\.narada\tools\agent-start\start-agent.mjs
-C:\Users\Andrey\OneDrive - Global Maxima LLC\!Business\!Clients\Utz\.narada\tools\agent-start\start-agent.mjs
+D:\code\narada.utz\.narada\tools\agent-start\start-agent.mjs
 D:\code\thoughts\.narada\tools\agent-start\start-agent.mjs
 ```
 
