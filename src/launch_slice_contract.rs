@@ -95,7 +95,7 @@ mod tests {
         assert_eq!(
             parse_launch_slice_contract(&invalid_contract_json(|contract| {
                 contract.admitted_runtime_slice =
-                    "bounded_non_terminal_interactive_step_once".to_string();
+                    "invalid_removed_runtime_slice_fixture".to_string();
             }))
             .unwrap_err(),
             "launch_slice_contract_invalid:admitted_runtime_slice"
