@@ -2,6 +2,9 @@ use crate::carrier_protocol::{
     InputEvent, SessionEventKind, create_provider_request_payload,
     create_provider_text_delta_payload, create_provider_tool_call_payload,
 };
+use crate::input_queue::SessionEvidenceContext;
+use crate::mcp_fabric_transport::McpFabricTransportClient;
+use crate::mcp_runtime_config::{McpRuntimeAdmissionStatus, McpRuntimeConfig};
 use crate::operator_routing_contract::{DirectToolRoute, ReaderRoute, operator_routing_contract};
 use crate::provider_adapter_admission::{ProviderAdapterAdmission, ProviderAdapterKind};
 use crate::provider_process_tree::ProviderProcess;
@@ -10,9 +13,11 @@ use crate::rendering_boundary::{
     InlinePayloadDecision, decide_payload_inline, default_payload_policy,
 };
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::env;
+use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{
     Arc,
@@ -190,7 +195,26 @@ pub struct ProviderDispatchStub {
 pub struct CodexSubscriptionProviderAdapter {
     runtime_config: ProviderRuntimeConfig,
     adapter_admission: ProviderAdapterAdmission,
+    codex_mcp_isolation: Option<CodexMcpIsolation>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexMcpIsolation {
+    pub codex_home: PathBuf,
+    pub codex_config_dir: PathBuf,
+    pub config_toml: String,
+    pub auth_source_home: Option<PathBuf>,
+}
+
+const CODEX_AUTH_FILE_NAMES: &[&str] = &[
+    "auth.json",
+    "credentials.json",
+    "credential.json",
+    "token.json",
+    "tokens.json",
+    "session.json",
+    "sessions.json",
+];
 
 impl ProviderAdapterRequest {
     pub fn from_input(
@@ -263,6 +287,160 @@ fn provider_streaming_contract(provider_execution_enabled: bool, stream: bool) -
         (false, true) => "requested_but_not_dispatched",
         (false, false) => "not_requested",
     }
+}
+
+impl CodexMcpIsolation {
+    pub fn from_mcp_runtime_config(
+        config: &McpRuntimeConfig,
+        context: &SessionEvidenceContext,
+    ) -> Result<Option<Self>, String> {
+        match config.status {
+            McpRuntimeAdmissionStatus::Disabled => Ok(None),
+            McpRuntimeAdmissionStatus::Refused => Ok(None),
+            McpRuntimeAdmissionStatus::Configured => {
+                let Some(config_path) = config.config_path.as_deref() else {
+                    return Err("codex_mcp_isolation_missing_mcp_config".to_string());
+                };
+                let client = McpFabricTransportClient::from_path(config_path)?;
+                let codex_home = codex_home_for_context(context);
+                Ok(Some(Self::from_client(codex_home, &client)))
+            }
+        }
+    }
+
+    pub fn from_client(codex_home: impl Into<PathBuf>, client: &McpFabricTransportClient) -> Self {
+        Self::from_client_with_auth_source(codex_home, client, default_codex_home())
+    }
+
+    pub fn from_client_with_auth_source(
+        codex_home: impl Into<PathBuf>,
+        client: &McpFabricTransportClient,
+        auth_source_home: Option<PathBuf>,
+    ) -> Self {
+        let codex_home = codex_home.into();
+        Self {
+            codex_config_dir: codex_home.clone(),
+            codex_home,
+            config_toml: codex_config_toml(client),
+            auth_source_home,
+        }
+    }
+
+    pub fn materialize(&self) -> Result<(), String> {
+        fs::create_dir_all(&self.codex_home).map_err(|error| {
+            format!(
+                "codex_mcp_isolation_home_create_failed:{}:{error}",
+                self.codex_home.display()
+            )
+        })?;
+        project_codex_auth_files(self.auth_source_home.as_deref(), &self.codex_home)?;
+        fs::write(self.config_path(), &self.config_toml).map_err(|error| {
+            format!(
+                "codex_mcp_isolation_config_write_failed:{}:{error}",
+                self.config_path().display()
+            )
+        })
+    }
+
+    pub fn env_overrides(&self) -> Result<BTreeMap<String, String>, String> {
+        self.materialize()?;
+        let codex_home = self.codex_home.display().to_string();
+        Ok(BTreeMap::from([
+            ("CODEX_HOME".to_string(), codex_home.clone()),
+            ("CODEX_CONFIG_DIR".to_string(), codex_home),
+        ]))
+    }
+
+    pub fn config_path(&self) -> PathBuf {
+        self.codex_home.join("config.toml")
+    }
+}
+
+fn codex_home_for_context(context: &SessionEvidenceContext) -> PathBuf {
+    PathBuf::from(&context.site_root)
+        .join(".narada")
+        .join("crew")
+        .join("nars-sessions")
+        .join(&context.carrier_session_id)
+        .join("codex-home")
+}
+
+fn default_codex_home() -> Option<PathBuf> {
+    if let Some(value) = env::var_os("CODEX_HOME") {
+        return Some(PathBuf::from(value));
+    }
+    env::var_os("USERPROFILE")
+        .or_else(|| env::var_os("HOME"))
+        .map(|user_root| PathBuf::from(user_root).join(".codex"))
+}
+
+fn project_codex_auth_files(source_home: Option<&Path>, target_home: &Path) -> Result<(), String> {
+    let Some(source_home) = source_home else {
+        return Ok(());
+    };
+    if source_home == target_home || !source_home.exists() {
+        return Ok(());
+    }
+    for file_name in CODEX_AUTH_FILE_NAMES {
+        let source_path = source_home.join(file_name);
+        if !source_path.exists() {
+            continue;
+        }
+        let metadata = match fs::metadata(&source_path) {
+            Ok(metadata) => metadata,
+            Err(_) => continue,
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        let target_path = target_home.join(file_name);
+        fs::copy(&source_path, &target_path).map_err(|error| {
+            format!(
+                "codex_mcp_isolation_auth_copy_failed:{}:{}:{error}",
+                source_path.display(),
+                target_path.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn codex_config_toml(client: &McpFabricTransportClient) -> String {
+    let mut lines = vec![
+        "# Generated by narada-agent-tui for nested Codex subprocesses.".to_string(),
+        "# Mirrors the target Site MCP fabric; does not import User Site MCP servers.".to_string(),
+        String::new(),
+    ];
+    for (name, server) in &client.servers {
+        lines.push(format!("[mcp_servers.\"{}\"]", toml_key(name)));
+        lines.push(format!("command = {}", toml_string(&server.command)));
+        lines.push(format!(
+            "args = {}",
+            serde_json::to_string(
+                &server
+                    .args
+                    .iter()
+                    .map(|arg| normalize_codex_path(arg))
+                    .collect::<Vec<_>>()
+            )
+            .expect("MCP server args serialize")
+        ));
+        lines.push("default_tools_approval_mode = \"approve\"".to_string());
+        lines.push(String::new());
+    }
+    lines.join("\n")
+}
+
+fn toml_string(value: &str) -> String {
+    serde_json::to_string(&normalize_codex_path(value)).expect("TOML string JSON escapes")
+}
+
+fn toml_key(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn normalize_codex_path(value: &str) -> String {
+    value.replace('\\', "/")
 }
 
 impl ProviderOutputRecord {
@@ -400,6 +578,18 @@ pub fn provider_adapter_from_runtime_config(
     runtime_config: ProviderRuntimeConfig,
     adapter_admission: ProviderAdapterAdmission,
 ) -> Box<dyn ProviderAdapter> {
+    provider_adapter_from_runtime_config_with_codex_mcp_isolation(
+        runtime_config,
+        adapter_admission,
+        None,
+    )
+}
+
+pub fn provider_adapter_from_runtime_config_with_codex_mcp_isolation(
+    runtime_config: ProviderRuntimeConfig,
+    adapter_admission: ProviderAdapterAdmission,
+    codex_mcp_isolation: Option<CodexMcpIsolation>,
+) -> Box<dyn ProviderAdapter> {
     if adapter_admission.provider_execution_enabled
         && adapter_admission.adapter_kind.as_deref()
             == Some(ProviderAdapterKind::CodexSubscription.as_str())
@@ -407,6 +597,7 @@ pub fn provider_adapter_from_runtime_config(
         return Box::new(CodexSubscriptionProviderAdapter {
             runtime_config,
             adapter_admission,
+            codex_mcp_isolation,
         });
     }
     Box::new(
@@ -572,7 +763,12 @@ impl CodexSubscriptionProviderAdapter {
                 )],
             };
         }
-        match run_codex_subscription_request(request, cancellation, sink) {
+        match run_codex_subscription_request(
+            request,
+            cancellation,
+            sink,
+            self.codex_mcp_isolation.as_ref(),
+        ) {
             ProviderExecutionResult::Completed(outputs) => {
                 let status = ProviderDispatchStatus::Completed;
                 ProviderDispatchRecord {
@@ -690,6 +886,7 @@ fn run_codex_subscription_request(
     request: &ProviderAdapterRequest,
     cancellation: &ProviderCancellationToken,
     sink: &mut dyn ProviderOutputSink,
+    codex_mcp_isolation: Option<&CodexMcpIsolation>,
 ) -> ProviderExecutionResult {
     let prompt = prompt_with_carrier_goal(request);
     if prompt.trim().is_empty() {
@@ -723,7 +920,15 @@ fn run_codex_subscription_request(
     args.push(cwd.display().to_string());
     args.push("-".to_string());
 
-    let mut child = match ProviderProcess::spawn(&command, &args, &cwd) {
+    let provider_env = match codex_mcp_isolation {
+        Some(isolation) => match isolation.env_overrides() {
+            Ok(env) => env,
+            Err(error) => return ProviderExecutionResult::Failed(error),
+        },
+        None => BTreeMap::new(),
+    };
+
+    let mut child = match ProviderProcess::spawn_with_env(&command, &args, &cwd, &provider_env) {
         Ok(child) => child,
         Err(error) => {
             return ProviderExecutionResult::Failed(format!("codex_exec_spawn_failed:{error}"));
@@ -1029,7 +1234,8 @@ mod tests {
     use crate::provider_adapter_contract::provider_adapter_contract;
     use crate::test_env_lock::ENV_LOCK;
     use std::collections::BTreeMap;
-    use std::fs::{create_dir_all, remove_dir_all, write};
+    use std::fs::{create_dir_all, read_to_string, remove_dir_all, write};
+    use std::path::Path;
     use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
@@ -1136,6 +1342,176 @@ mod tests {
         }
     }
 
+    fn site_mcp_fabric_config_json() -> &'static str {
+        r#"{
+  "site_id": "narada-sonar",
+  "carrier": "agent-tui",
+  "mcpServers": {
+    "narada-sonar-agent-context": {
+      "transport": "stdio",
+      "command": "node",
+      "args": [
+        "D:/code/mcp-surfaces/packages/agent-context-mcp/dist/src/main.js",
+        "--site-root",
+        "D:/code/narada.sonar"
+      ],
+      "tools": ["agent_context_startup_sequence"]
+    },
+    "narada-sonar-scheduler": {
+      "transport": "stdio",
+      "command": "node",
+      "args": [
+        "D:/code/mcp-surfaces/packages/scheduler-mcp/dist/src/main.js"
+      ],
+      "tools": ["scheduler_list"]
+    }
+  }
+}"#
+    }
+
+    #[test]
+    fn codex_mcp_isolation_config_contains_only_site_fabric_servers() {
+        let client = McpFabricTransportClient::from_json_str(
+            "D:/code/narada.sonar/.ai/mcp/agent-tui.json",
+            site_mcp_fabric_config_json(),
+        )
+        .expect("site MCP fabric parses");
+        let isolation =
+            CodexMcpIsolation::from_client("D:/tmp/narada-agent-tui-codex-config-fixture", &client);
+
+        assert!(
+            isolation
+                .config_toml
+                .contains("[mcp_servers.\"narada-sonar-agent-context\"]")
+        );
+        assert!(
+            isolation
+                .config_toml
+                .contains("[mcp_servers.\"narada-sonar-scheduler\"]")
+        );
+        assert!(isolation.config_toml.contains("D:/code/narada.sonar"));
+        assert!(
+            isolation
+                .config_toml
+                .contains("default_tools_approval_mode = \"approve\"")
+        );
+        assert!(!isolation.config_toml.contains("narada-andrey"));
+        assert!(!isolation.config_toml.contains("C:/Users/Andrey/Narada"));
+    }
+
+    #[test]
+    fn codex_mcp_isolation_materializes_session_scoped_config_dir_env() {
+        let fixture_dir = env::temp_dir().join(format!(
+            "narada-agent-tui-codex-isolation-{}",
+            std::process::id()
+        ));
+        remove_dir_all(&fixture_dir).ok();
+        let fabric_dir = fixture_dir.join(".narada").join("mcp");
+        create_dir_all(&fabric_dir).expect("fabric dir created");
+        let config_path = fabric_dir.join("agent-tui.json");
+        write(&config_path, site_mcp_fabric_config_json()).expect("fabric config written");
+        let context = SessionEvidenceContext {
+            carrier_session_id: "carrier_fixture".to_string(),
+            agent_id: "sonar.resident".to_string(),
+            site_id: "sonar".to_string(),
+            site_root: fixture_dir.display().to_string(),
+        };
+        let mcp_config = McpRuntimeConfig {
+            status: McpRuntimeAdmissionStatus::Configured,
+            mcp_fabric_access_enabled: true,
+            config_path_policy: "site_mcp_fabric_child",
+            config_path: Some(config_path.display().to_string()),
+            site_mcp_fabric: Some(fabric_dir.display().to_string()),
+            refusal_reason: None,
+        };
+        let mut isolation = CodexMcpIsolation::from_mcp_runtime_config(&mcp_config, &context)
+            .expect("isolation admitted")
+            .expect("isolation configured");
+        isolation.auth_source_home = None;
+
+        assert!(
+            isolation.codex_home.ends_with(
+                Path::new(".narada")
+                    .join("crew")
+                    .join("nars-sessions")
+                    .join("carrier_fixture")
+                    .join("codex-home")
+            )
+        );
+        assert!(
+            isolation.codex_config_dir.ends_with(
+                Path::new(".narada")
+                    .join("crew")
+                    .join("nars-sessions")
+                    .join("carrier_fixture")
+                    .join("codex-home")
+            )
+        );
+        let env = isolation
+            .env_overrides()
+            .expect("env overrides materialize");
+        let codex_home = isolation.codex_home.display().to_string();
+        assert_eq!(env.get("CODEX_HOME"), Some(&codex_home));
+        assert_eq!(env.get("CODEX_CONFIG_DIR"), Some(&codex_home));
+        let materialized_config =
+            read_to_string(isolation.config_path()).expect("config materialized");
+        assert!(materialized_config.contains("narada-sonar-agent-context"));
+        assert!(!materialized_config.contains("narada-andrey"));
+
+        remove_dir_all(fixture_dir).ok();
+    }
+
+    #[test]
+    fn codex_mcp_isolation_projects_auth_but_not_ambient_config() {
+        let fixture_dir = env::temp_dir().join(format!(
+            "narada-agent-tui-codex-auth-isolation-{}",
+            std::process::id()
+        ));
+        remove_dir_all(&fixture_dir).ok();
+        let ambient_home = fixture_dir.join("ambient-codex-home");
+        let isolated_home = fixture_dir.join("isolated-codex-home");
+        create_dir_all(&ambient_home).expect("ambient codex home created");
+        write(
+            ambient_home.join("auth.json"),
+            "{\"access_token\":\"fixture\"}\n",
+        )
+        .expect("auth fixture written");
+        write(
+            ambient_home.join("config.toml"),
+            "[mcp_servers.\"narada-andrey-agent-context\"]\ncommand = \"node\"\n",
+        )
+        .expect("ambient config fixture written");
+        let client = McpFabricTransportClient::from_json_str(
+            "D:/code/narada.sonar/.ai/mcp/agent-tui.json",
+            site_mcp_fabric_config_json(),
+        )
+        .expect("site MCP fabric parses");
+        let isolation = CodexMcpIsolation::from_client_with_auth_source(
+            isolated_home.clone(),
+            &client,
+            Some(ambient_home.clone()),
+        );
+        let env = isolation
+            .env_overrides()
+            .expect("env overrides materialize");
+
+        assert_eq!(
+            env.get("CODEX_HOME"),
+            Some(&isolated_home.display().to_string())
+        );
+        assert_eq!(env.get("CODEX_CONFIG_DIR"), env.get("CODEX_HOME"));
+        assert_eq!(
+            read_to_string(isolated_home.join("auth.json")).expect("auth projected"),
+            "{\"access_token\":\"fixture\"}\n"
+        );
+        let materialized_config =
+            read_to_string(isolated_home.join("config.toml")).expect("config materialized");
+        assert!(materialized_config.contains("narada-sonar-agent-context"));
+        assert!(!materialized_config.contains("narada-andrey-agent-context"));
+
+        remove_dir_all(fixture_dir).ok();
+    }
+
     #[test]
     fn codex_subscription_requires_explicit_site_root() {
         let _guard = ENV_LOCK.lock().expect("provider env lock");
@@ -1155,8 +1531,12 @@ mod tests {
         };
         let mut sink = NoopProviderOutputSink;
 
-        let result =
-            run_codex_subscription_request(&request, &ProviderCancellationToken::new(), &mut sink);
+        let result = run_codex_subscription_request(
+            &request,
+            &ProviderCancellationToken::new(),
+            &mut sink,
+            None,
+        );
 
         if let Some(previous) = previous_site_root {
             set_test_env_var("NARADA_SITE_ROOT", previous);
@@ -1415,6 +1795,7 @@ mod tests {
                 ])),
                 Some(ProviderAdapterKind::CodexSubscription.as_str()),
             ),
+            codex_mcp_isolation: None,
         };
 
         let record = adapter.dispatch_request(&input, "turn_1", &ProviderCancellationToken::new());

@@ -87,17 +87,12 @@ Source: `src/main.rs`, `src/launch_slice_contract.rs`.
 | `--identity <value>` | Sets agent identity. |
 | `--session <value>` | Sets carrier session id. |
 | `--site-root <path>` | Sets site root. |
-| `--control-jsonl <path>` | Sets control input stream path. Required for runtime and interactive modes. |
-| `--session-jsonl <path>` | Sets session evidence stream path. Required for runtime and interactive modes. |
-| `--runtime-step-once` | Runs one runtime step. |
-| `--runtime-loop` | Runs runtime loop. Requires `--max-steps > 0`. |
-| `--interactive-step-once` | Runs one interactive step. |
-| `--interactive-smoke-loop` | Runs interactive smoke loop. Requires `--max-steps > 0`. |
+| `--control-jsonl <path>` | Sets control input stream path. Required for terminal interactive loop. |
+| `--session-jsonl <path>` | Sets session evidence stream path. Required for terminal interactive loop. |
 | `--interactive-loop` | Contract carrier flag for terminal interactive loop. Requires `--max-steps > 0`. |
 | `--render-once` | Renders once. |
-| `--max-steps <positive integer>` | Loop step limit. Valid only with loop modes. |
+| `--max-steps <positive integer>` | Loop step limit. Valid only with `--interactive-loop`. |
 | `--composer-has-draft` | Starts with composer draft state for smoke/test flow. |
-| `--persistent-smoke-session` | Requires `--interactive-step-once`. |
 | `--check-rust-toolchain` | Toolchain check mode. |
 | `--help`, `-h` | Help mode. |
 | `--version`, `-V` | Version mode. |

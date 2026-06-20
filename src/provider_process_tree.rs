@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -21,6 +22,15 @@ impl ProviderProcess {
         args: &[String],
         cwd: &Path,
     ) -> io::Result<ProviderProcess> {
+        Self::spawn_with_env(command, args, cwd, &BTreeMap::new())
+    }
+
+    pub fn spawn_with_env(
+        command: impl AsRef<Path>,
+        args: &[String],
+        cwd: &Path,
+        env: &BTreeMap<String, String>,
+    ) -> io::Result<ProviderProcess> {
         let mut command_builder = Command::new(command.as_ref());
         command_builder
             .args(args)
@@ -28,6 +38,7 @@ impl ProviderProcess {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        command_builder.envs(env);
 
         #[cfg(unix)]
         {

@@ -1,12 +1,5 @@
 use narada_agent_tui::provider_adapter_contract::provider_adapter_contract;
-use std::fs::{read_to_string, remove_file, write};
-use std::path::PathBuf;
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-const CONTROL_FIXTURE: &str =
-    include_str!("../../narada/packages/carrier-protocol/fixtures/control-input-event.json");
-static TEMP_PATH_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn admitted_provider() -> &'static str {
     provider_adapter_contract()
@@ -61,19 +54,10 @@ fn stdout(command: &mut Command) -> String {
     String::from_utf8(output.stdout).expect("stdout is utf8")
 }
 
-fn temp_path(name: &str) -> PathBuf {
-    let unique = TEMP_PATH_COUNTER.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!(
-        "narada-agent-tui-provider-runtime-{name}-{}-{unique}.jsonl",
-        std::process::id()
-    ))
-}
-
-fn provider_prompt_control_fixture() -> String {
-    CONTROL_FIXTURE.replace(
-        "\"content\":\"run startup sequence\"",
-        "\"content\":\"summarize provider runtime state\"",
-    )
+fn failure_stderr(command: &mut Command) -> String {
+    let output = command.output().expect("binary runs");
+    assert!(!output.status.success(), "process unexpectedly succeeded");
+    String::from_utf8(output.stderr).expect("stderr is utf8")
 }
 
 #[test]
@@ -184,147 +168,20 @@ fn provider_runtime_cli_acceptance_reports_requested_adapter_as_admitted_when_im
     assert!(!output.contains("provider_adapter_refusal:"));
 }
 
-fn assert_configured_provider_posture_recorded(session_jsonl: &str) {
-    assert_configured_provider_posture_recorded_with_adapter(
-        session_jsonl,
-        "configured_without_adapter",
-        "\"provider_adapter_kind\":null",
-        "provider_adapter_not_admitted",
-    );
-}
-
-fn assert_configured_provider_posture_recorded_with_adapter(
-    session_jsonl: &str,
-    adapter_status: &str,
-    adapter_kind_fragment: &str,
-    refusal_reason: &str,
-) {
-    assert!(session_jsonl.contains("\"provider_request_status\":\"recorded_not_dispatched\""));
-    assert!(session_jsonl.contains("\"provider_runtime_status\":\"configured\""));
-    assert!(session_jsonl.contains(&format!("\"provider\":\"{}\"", admitted_provider())));
-    assert!(session_jsonl.contains("\"model\":\"gpt-5.5\""));
-    assert!(session_jsonl.contains(&format!(
-        "\"provider_adapter_admission_status\":\"{adapter_status}\""
-    )));
-    assert!(session_jsonl.contains(adapter_kind_fragment));
-    assert!(session_jsonl.contains(&format!(
-        "\"provider_adapter_refusal_reason\":\"{refusal_reason}\""
-    )));
-}
-
 #[test]
-fn provider_runtime_cli_acceptance_records_runtime_posture_in_runtime_step_evidence() {
-    let control_path = temp_path("control");
-    let session_path = temp_path("session");
-    write(&control_path, format!("{CONTROL_FIXTURE}\n")).expect("control fixture writes");
+fn provider_runtime_cli_acceptance_rejects_removed_non_terminal_runtime_flags() {
+    for flag in [
+        "--runtime-step-once",
+        "--runtime-loop",
+        "--interactive-step-once",
+        "--interactive-smoke-loop",
+        "--persistent-smoke-session",
+    ] {
+        let mut command = base_command();
+        command.arg(flag);
 
-    let mut command = base_command();
-    command
-        .arg("--control-jsonl")
-        .arg(&control_path)
-        .arg("--session-jsonl")
-        .arg(&session_path)
-        .arg("--runtime-step-once");
-    with_provider_env(
-        &mut command,
-        &[
-            ("execution_enabled", "true"),
-            ("provider", admitted_provider()),
-            ("model", "gpt-5.5"),
-        ],
-    );
-
-    let output = stdout(&mut command);
-    assert!(output.contains("runtime_step_once: ok"));
-
-    let session_jsonl = read_to_string(&session_path).expect("session jsonl exists");
-    assert_configured_provider_posture_recorded(&session_jsonl);
-
-    remove_file(control_path).ok();
-    remove_file(session_path).ok();
-}
-
-#[test]
-fn provider_runtime_cli_acceptance_records_production_adapter_admission_in_runtime_step_evidence() {
-    let control_path = temp_path("control");
-    let session_path = temp_path("session");
-    write(
-        &control_path,
-        format!("{}\n", provider_prompt_control_fixture()),
-    )
-    .expect("control fixture writes");
-
-    let mut command = base_command();
-    let contract = provider_adapter_contract();
-    command
-        .arg("--control-jsonl")
-        .arg(&control_path)
-        .arg("--session-jsonl")
-        .arg(&session_path)
-        .arg("--runtime-step-once");
-    with_provider_env(
-        &mut command,
-        &[
-            ("execution_enabled", "true"),
-            ("provider", admitted_provider()),
-            ("model", "gpt-5.5"),
-            (
-                "adapter_kind",
-                contract.production_provider_adapter_kind.as_str(),
-            ),
-        ],
-    );
-    command.env(
-        "NARADA_AGENT_TUI_CODEX_COMMAND",
-        "definitely-missing-codex-fixture",
-    );
-
-    let output = stdout(&mut command);
-    assert!(output.contains("runtime_step_once: ok"));
-
-    let adapter_kind_fragment = format!(
-        "\"provider_adapter_kind\":\"{}\"",
-        contract.production_provider_adapter_kind
-    );
-    let session_jsonl = read_to_string(&session_path).expect("session jsonl exists");
-    assert!(session_jsonl.contains("\"provider_request_status\":\"failed\""));
-    assert!(session_jsonl.contains("\"provider_execution_enabled\":true"));
-    assert!(session_jsonl.contains("\"provider_adapter_admission_status\":\"admitted\""));
-    assert!(session_jsonl.contains(&adapter_kind_fragment));
-    assert!(session_jsonl.contains("provider dispatch failed:"));
-
-    remove_file(control_path).ok();
-    remove_file(session_path).ok();
-}
-
-#[test]
-fn provider_runtime_cli_acceptance_records_runtime_posture_in_interactive_step_evidence() {
-    let control_path = temp_path("control");
-    let session_path = temp_path("session");
-    write(&control_path, format!("{CONTROL_FIXTURE}\n")).expect("control fixture writes");
-
-    let mut command = base_command();
-    command
-        .arg("--control-jsonl")
-        .arg(&control_path)
-        .arg("--session-jsonl")
-        .arg(&session_path)
-        .arg("--interactive-step-once");
-    with_provider_env(
-        &mut command,
-        &[
-            ("execution_enabled", "true"),
-            ("provider", admitted_provider()),
-            ("model", "gpt-5.5"),
-        ],
-    );
-
-    let output = stdout(&mut command);
-    assert!(output.contains("interactive_step_once: ok"));
-
-    let session_jsonl = read_to_string(&session_path).expect("session jsonl exists");
-    assert_configured_provider_posture_recorded(&session_jsonl);
-
-    remove_file(control_path).ok();
-    remove_file(session_path).ok();
+        let stderr = failure_stderr(&mut command);
+        assert!(stderr.contains("has been removed"), "{flag}: {stderr}");
+        assert!(stderr.contains("--interactive-loop"), "{flag}: {stderr}");
+    }
 }

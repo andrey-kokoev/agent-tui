@@ -13,6 +13,7 @@ pub struct ProviderAdapterContract {
     pub provider_execution_env_var: String,
     pub provider_adapter_kind_env_var: String,
     pub intelligence_provider_env_var: String,
+    #[serde(alias = "provider_model_env_var")]
     pub ai_model_env_var: String,
     pub ai_thinking_env_var: String,
     pub ai_stream_env_var: String,

@@ -132,14 +132,14 @@ It is now admitted as the `agent-start -Runtime agent-tui` terminal interactive-
 - Agent-start launch metadata includes a concrete `site_rollout_acceptance` matrix for all launcher-registry Narada Sites, with per-Site side-by-side agent-cli/agent-tui evidence requirements and default promotion blocked until acceptance is current.
 - `tools/agent-start/agent-tui-rollout-acceptance.mjs` builds a non-launching rollout acceptance report from the launch metadata, accepts explicit `--known-site-root site=path` root resolution, accepts per-Site `--agent-cli-evidence site=path` and `--agent-tui-evidence site=path`, validates evidence as complete live authoritative `narada.agent_start.result.v0` launch packets for the expected runtime, `launching` status, `dry_run=false`, `exec=true`, authoritative agent-start and carrier-session records, event/session IDs, carrier-specific session/control paths, terminal `agent-tui` interactive-loop slice, and matching Site root, marks a Site accepted only when both evidence paths are valid for that Site, names unresolved or missing Site roots and missing, incomplete, or invalid side-by-side evidence, and can write `.narada/crew/agent-tui-rollout-acceptance/latest.json`.
 - Agent-start launch metadata exposes the `agent-tui` Rust toolchain readiness preflight command, expected blocker, and exit-code semantics.
-- Agent-start tests assert production launch does not opt into `--interactive-smoke-loop`, `--persistent-smoke-session`, legacy `--runtime-loop`, or `--max-steps`.
+- Agent-start tests assert production launch uses the terminal `--interactive-loop` slice and does not opt into removed non-terminal runtime or smoke flags.
 
 ## Promotion Gate
 
 `agent-tui` now uses the terminal interactive-loop launch path for `agent-start -Runtime agent-tui`. The remaining promotion gates are not about terminal rendering admission; they govern what the terminal carrier may execute once running:
 
 - Rust tests run in CI or a documented local toolchain with MSVC `link.exe` available.
-- `--interactive-step-once` and `--interactive-smoke-loop --max-steps <n>` remain regression harnesses for queued operator input, held system directives, release, interrupt, malformed control JSONL, and transcript projection.
+- Removed non-terminal runtime and smoke CLI flags are rejected at argument parsing; regression coverage now enters through the terminal `--interactive-loop --max-steps <n>` path or lower-level Rust harnesses.
 - `--interactive-loop --max-steps <n>` has scripted terminal-frame acceptance that verifies no blank frame, stable layout rectangles, preserved composer draft, and clean terminal leave on exit/error.
 - Provider dispatch remains explicitly disabled unless a production provider adapter implementation is admitted with its own authority and evidence contract.
 - Site MCP access remains explicitly disabled unless production Site MCP exposure is admitted with policy-bound tool visibility.
