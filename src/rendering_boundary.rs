@@ -3,9 +3,9 @@ use crate::carrier_protocol::{
     payload_ref_schema, session_event_schema,
 };
 use crate::carrier_protocol_contract::{diagnostic_info_level, diagnostic_warning_level};
-use crate::input_queue::SessionEvidenceContext;
 use crate::layout_model::{AgentTuiLayout, LayoutConfig, TerminalSize, compute_layout};
 use crate::operator_routing_contract::payload_reader_tool_name;
+use crate::projection_state::SessionEvidenceContext;
 use serde_json::json;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

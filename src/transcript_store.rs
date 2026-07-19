@@ -1,8 +1,6 @@
-use crate::carrier_protocol::{SessionEvent, parse_session_event};
+use crate::carrier_protocol::SessionEvent;
 use crate::transcript_projection::{TranscriptItem, TranscriptItemKind, project_session_event};
 use std::collections::HashSet;
-use std::fs::read_to_string;
-use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TranscriptIngestResult {
@@ -58,6 +56,19 @@ impl TranscriptStore {
     }
 
     pub fn ingest_event(&mut self, event: &SessionEvent) -> TranscriptIngestResult {
+        self.ingest_event_at(event, false)
+    }
+
+    pub fn ingest_history_events(&mut self, events: &[SessionEvent]) -> TranscriptIngestSummary {
+        let mut summary = TranscriptIngestSummary::default();
+        for event in events.iter().rev() {
+            summary.add_result(self.ingest_event_at(event, true));
+        }
+        summary.total_items = self.len();
+        summary
+    }
+
+    fn ingest_event_at(&mut self, event: &SessionEvent, prepend: bool) -> TranscriptIngestResult {
         if self.ingested_event_ids.contains(&event.event_id) {
             return TranscriptIngestResult::Duplicate;
         }
@@ -70,10 +81,14 @@ impl TranscriptStore {
                 }
                 self.ingested_projection_keys.insert(projection_key.clone());
             }
-            if self.merge_streaming_provider_delta(&item) {
+            if !prepend && self.merge_streaming_provider_delta(&item) {
                 return TranscriptIngestResult::Projected;
             }
-            self.items.push(item);
+            if prepend {
+                self.items.insert(0, item);
+            } else {
+                self.items.push(item);
+            }
             TranscriptIngestResult::Projected
         } else {
             TranscriptIngestResult::Ignored
@@ -96,56 +111,6 @@ impl TranscriptStore {
         previous.text.push_str(&item.text);
         previous.sequence = item.sequence;
         true
-    }
-
-    pub fn ingest_jsonl_line(&mut self, line: &str) -> Result<TranscriptIngestResult, String> {
-        let trimmed = line.trim_end();
-        if trimmed.trim().is_empty() {
-            return Ok(TranscriptIngestResult::Ignored);
-        }
-        let event = parse_session_event(trimmed)?;
-        Ok(self.ingest_event(&event))
-    }
-
-    pub fn ingest_jsonl_lines(
-        &mut self,
-        content: &str,
-    ) -> Result<Vec<TranscriptIngestResult>, String> {
-        let mut results = Vec::new();
-        for (index, line) in content.lines().enumerate() {
-            results.push(
-                self.ingest_jsonl_line(line)
-                    .map_err(|error| format!("line_{}:{error}", index + 1))?,
-            );
-        }
-        Ok(results)
-    }
-
-    pub fn ingest_jsonl_summary(
-        &mut self,
-        content: &str,
-    ) -> Result<TranscriptIngestSummary, String> {
-        let mut summary = TranscriptIngestSummary::default();
-        for result in self.ingest_jsonl_lines(content)? {
-            summary.add_result(result);
-        }
-        summary.total_items = self.len();
-        Ok(summary)
-    }
-
-    pub fn ingest_jsonl_file_summary(
-        &mut self,
-        path: &Path,
-    ) -> Result<TranscriptIngestSummary, String> {
-        if !path.exists() {
-            return Ok(TranscriptIngestSummary {
-                total_items: self.len(),
-                ..TranscriptIngestSummary::default()
-            });
-        }
-        let content =
-            read_to_string(path).map_err(|error| format!("session_jsonl_read_failed:{error}"))?;
-        self.ingest_jsonl_summary(&content)
     }
 }
 
@@ -428,62 +393,44 @@ mod tests {
     }
 
     #[test]
-    fn ingests_jsonl_lines() {
+    fn prepends_history_pages_without_reordering_live_items() {
         let mut store = TranscriptStore::new();
-        let first = serde_json::to_string(&event(
-            "session_event_1",
-            SessionEventKind::SystemDirectiveHeld,
+        store.ingest_event(&event(
+            "session_event_current",
+            SessionEventKind::ProviderTextDeltaRecorded,
             json!({
-                "input_event_id": "input_1",
-                "held_at": "2026-05-30T00:00:00.000Z",
-                "held_reason": "composer_nonempty",
-                "original_delivery_mode": "admit_for_current_turn"
+                "turn_id": "turn_current",
+                "text_delta": "current"
             }),
-        ))
-        .expect("event serializes");
-        let second = serde_json::to_string(&event(
-            "session_event_2",
-            SessionEventKind::TurnFailed,
-            json!({
-                "schema": turn_terminal_payload_schema(),
-                "turn_id": "turn_1",
-                "terminal_status": "failed",
-                "provider_request_status": "failed",
-                "provider_execution_enabled": true,
-                "error_summary": "failed"
-            }),
-        ))
-        .expect("event serializes");
+        ));
 
-        let results = store
-            .ingest_jsonl_lines(&format!("{first}\n{second}\n"))
-            .expect("jsonl ingests");
+        let summary = store.ingest_history_events(&[
+            event(
+                "session_event_old_1",
+                SessionEventKind::ProviderTextDeltaRecorded,
+                json!({
+                    "turn_id": "turn_old",
+                    "text_delta": "old one"
+                }),
+            ),
+            event(
+                "session_event_old_2",
+                SessionEventKind::ProviderTextDeltaRecorded,
+                json!({
+                    "turn_id": "turn_old",
+                    "text_delta": "old two"
+                }),
+            ),
+        ]);
 
+        assert_eq!(summary.projected, 2);
         assert_eq!(
-            results,
-            vec![
-                TranscriptIngestResult::Projected,
-                TranscriptIngestResult::Projected
-            ]
+            store
+                .items()
+                .iter()
+                .map(|item| item.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["old one", "old two", "current"]
         );
-        assert_eq!(
-            store.items()[0].kind,
-            TranscriptItemKind::SystemDirectiveHeld
-        );
-        assert_eq!(
-            store.items()[1].kind,
-            TranscriptItemKind::TurnTerminalStatus
-        );
-    }
-
-    #[test]
-    fn reports_jsonl_line_parse_errors_with_line_number() {
-        let mut store = TranscriptStore::new();
-        let error = store
-            .ingest_jsonl_lines("\nnot json\n")
-            .expect_err("invalid jsonl is rejected");
-
-        assert!(error.starts_with("line_2:"));
-        assert!(store.is_empty());
     }
 }

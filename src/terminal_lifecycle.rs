@@ -1,7 +1,7 @@
 use crate::app_view_model::AppViewModel;
+use crate::layout_model::TerminalSize;
 use crate::ratatui_renderer::{render_app_to_frame, render_app_to_frame_with_composer};
 use crate::textarea_composer::TextareaComposer;
-use crate::tui_render_loop::InteractiveTerminalFrame;
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -9,6 +9,15 @@ use crossterm::terminal::{
 use ratatui::Terminal;
 use ratatui::backend::{Backend, CrosstermBackend};
 use std::io::{Stdout, stdout};
+
+pub trait InteractiveTerminalFrame {
+    fn terminal_size(&mut self) -> Result<TerminalSize, String>;
+    fn draw_frame(
+        &mut self,
+        model: &AppViewModel,
+        composer: &TextareaComposer,
+    ) -> Result<(), String>;
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalLifecycleState {
@@ -196,6 +205,17 @@ impl TerminalSession {
         self.lifecycle.state()
     }
 
+    pub fn terminal_size(&mut self) -> Result<crate::layout_model::TerminalSize, String> {
+        let area = self
+            .terminal
+            .size()
+            .map_err(|error| format!("terminal_size_read_failed:{error}"))?;
+        Ok(crate::layout_model::TerminalSize {
+            width: area.width,
+            height: area.height,
+        })
+    }
+
     pub fn draw_once(&mut self, model: &AppViewModel) -> Result<(), String> {
         draw_model_to_terminal(&mut self.terminal, model)
     }
@@ -256,8 +276,8 @@ mod tests {
     use crate::app_view_model::{AppViewInput, build_app_view};
     use crate::composer_draft::ComposerDraftState;
     use crate::composer_view_model::ComposerViewInput;
-    use crate::input_queue::TurnState;
     use crate::layout_model::{LayoutConfig, TerminalSize};
+    use crate::projection_state::TurnState;
     use crate::status_view_model::{ProviderRuntimeState, RuntimePostureState, StatusViewInput};
     use crate::transcript_projection::{TranscriptActor, TranscriptItem, TranscriptItemKind};
     use ratatui::backend::TestBackend;

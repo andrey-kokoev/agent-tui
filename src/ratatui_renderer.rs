@@ -2706,8 +2706,8 @@ mod tests {
     use super::*;
     use crate::app_view_model::{AppViewInput, build_app_view};
     use crate::composer_view_model::ComposerViewInput;
-    use crate::input_queue::TurnState;
     use crate::layout_model::{LayoutConfig, TerminalSize};
+    use crate::projection_state::TurnState;
     use crate::status_view_model::{
         ProviderRuntimeState, RuntimePostureState, StatusSegment, StatusViewInput,
     };

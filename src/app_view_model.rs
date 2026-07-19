@@ -105,7 +105,7 @@ fn set_status_segment_value(segments: &mut [StatusSegment], key: &str, value: &s
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input_queue::TurnState;
+    use crate::projection_state::TurnState;
     use crate::status_view_model::{
         McpRuntimeState, ProviderAdapterState, ProviderRuntimeState, RuntimePostureState,
         TerminalRuntimeState,

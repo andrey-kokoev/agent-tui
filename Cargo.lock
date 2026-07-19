@@ -255,12 +255,10 @@ name = "narada-agent-tui"
 version = "0.1.0"
 dependencies = [
  "crossterm",
- "libc",
  "ratatui",
  "serde",
  "serde_json",
  "tui-textarea",
- "windows-sys 0.59.0",
 ]
 
 [[package]]

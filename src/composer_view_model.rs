@@ -1,4 +1,4 @@
-use crate::input_queue::TurnState;
+use crate::projection_state::TurnState;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComposerViewInput {

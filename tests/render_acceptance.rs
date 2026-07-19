@@ -1,7 +1,7 @@
 use narada_agent_tui::app_view_model::{AppViewInput, build_app_view};
 use narada_agent_tui::composer_view_model::ComposerViewInput;
-use narada_agent_tui::input_queue::TurnState;
 use narada_agent_tui::layout_model::{LayoutConfig, Rect, TerminalSize};
+use narada_agent_tui::projection_state::TurnState;
 use narada_agent_tui::ratatui_renderer::render_app_to_buffer;
 use narada_agent_tui::status_view_model::{
     McpRuntimeState, ProviderAdapterState, ProviderRuntimeState, RuntimePostureState,

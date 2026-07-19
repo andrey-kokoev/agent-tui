@@ -1,42 +1,17 @@
-use narada_agent_tui::app_view_model::{AppViewInput, AppViewModel, build_app_view};
-use narada_agent_tui::composer_view_model::ComposerViewInput;
-use narada_agent_tui::input_queue::{SessionEvidenceContext, TurnState};
-use narada_agent_tui::interactive_runtime::AgentTuiInteractiveRuntime;
-use narada_agent_tui::launch_slice_contract::launch_slice_contract;
-use narada_agent_tui::layout_model::{LayoutConfig, TerminalSize};
-use narada_agent_tui::provider_dispatch::{
-    CodexMcpIsolation, provider_adapter_from_runtime_config_with_codex_mcp_isolation,
+use narada_agent_tui::nars_projection::{
+    resolve_event_endpoint_from_launch_binding, run_attached_projection,
 };
-use narada_agent_tui::provider_tool_call_bridge::provider_tool_call_executor_from_mcp_runtime_config;
-use narada_agent_tui::runtime_clock::RuntimeClock;
-use narada_agent_tui::runtime_config_snapshot::RuntimeConfigSnapshot;
-use narada_agent_tui::status_view_model::StatusViewInput;
-use narada_agent_tui::terminal_input_tick::CrosstermTerminalInputReader;
-use narada_agent_tui::terminal_lifecycle::TerminalSession;
-use narada_agent_tui::terminal_runtime_config::TerminalRuntimeConfig;
-use narada_agent_tui::tui_render_loop::{
-    AgentTuiLoopState, RuntimeClockInteractiveSource, TerminalInputTickSource,
-    run_injected_interactive_loop,
-};
-use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const INTERACTIVE_INPUT_IDLE_WAIT_MS: u64 = 25;
-
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Args {
+    attach: Option<String>,
+    launch_binding: Option<String>,
     identity: Option<String>,
     session: Option<String>,
-    site_root: Option<PathBuf>,
-    control_jsonl: Option<PathBuf>,
-    session_jsonl: Option<PathBuf>,
-    interactive_loop: bool,
-    render_once: bool,
     max_steps: Option<u64>,
-    composer_has_draft: bool,
     check_rust_toolchain: bool,
     help: bool,
     version: bool,
@@ -75,14 +50,28 @@ fn main() {
 }
 
 fn run(args: Args) -> Result<(), String> {
-    if args.interactive_loop {
-        run_interactive_loop(args)
-    } else if args.render_once {
-        run_render_once(args)
-    } else {
-        print_scaffold(&args);
-        Ok(())
-    }
+    let (endpoint, binding_identity, binding_session) =
+        match (args.attach.as_deref(), args.launch_binding.as_deref()) {
+            (Some(endpoint), None) => (endpoint.to_string(), None, None),
+            (None, Some(binding_path)) => {
+                let resolution = resolve_event_endpoint_from_launch_binding(binding_path)?;
+                (
+                    resolution.event_endpoint,
+                    resolution.identity,
+                    resolution.session,
+                )
+            }
+            _ => return Err(
+                "exactly one of --attach <event_endpoint> or --launch-binding <path> is required"
+                    .to_string(),
+            ),
+        };
+    run_attached_projection(
+        &endpoint,
+        args.identity.clone().or(binding_identity),
+        args.session.clone().or(binding_session),
+        args.max_steps,
+    )
 }
 
 fn run_rust_toolchain_check() -> i32 {
@@ -145,326 +134,33 @@ fn executable_candidates(name: &str) -> Vec<String> {
     }
 }
 
-fn print_scaffold(args: &Args) {
-    let runtime_config = runtime_config_snapshot_from_process_env();
-    let provider_config = &runtime_config.provider;
-    let provider_adapter = &runtime_config.provider_adapter;
-    let mcp_config = &runtime_config.mcp;
-    let terminal_config = &runtime_config.terminal;
-    println!("narada-agent-tui scaffold");
-    println!("identity: {}", args.identity.as_deref().unwrap_or(""));
-    println!("session: {}", args.session.as_deref().unwrap_or(""));
-    println!(
-        "site_root: {}",
-        args.site_root
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_default()
-    );
-    if let Some(path) = &args.control_jsonl {
-        println!("control_jsonl: {}", path.display());
-    }
-    if let Some(path) = &args.session_jsonl {
-        println!("session_jsonl: {}", path.display());
-    }
-    println!("provider_status: {}", provider_config.status.as_str());
-    println!(
-        "provider_execution_enabled: {}",
-        provider_adapter.provider_execution_enabled
-    );
-    if let Some(provider) = &provider_config.provider {
-        println!("provider: {provider}");
-    }
-    if let Some(model) = &provider_config.model {
-        println!("model: {model}");
-    }
-    if let Some(thinking) = &provider_config.thinking {
-        println!("thinking: {thinking}");
-    }
-    println!(
-        "stream: {}",
-        if provider_config.stream { "on" } else { "off" }
-    );
-    if let Some(reason) = &provider_config.refusal_reason {
-        println!("provider_refusal: {reason}");
-    }
-    println!(
-        "provider_adapter_status: {}",
-        provider_adapter.status.as_str()
-    );
-    println!(
-        "provider_adapter_execution_enabled: {}",
-        provider_adapter.provider_execution_enabled
-    );
-    if let Some(adapter_kind) = &provider_adapter.adapter_kind {
-        println!("provider_adapter_kind: {adapter_kind}");
-    }
-    if let Some(reason) = &provider_adapter.refusal_reason {
-        println!("provider_adapter_refusal: {reason}");
-    }
-    println!("mcp_status: {}", mcp_config.status.as_str());
-    println!(
-        "mcp_fabric_access_enabled: {}",
-        mcp_config.mcp_fabric_access_enabled
-    );
-    println!("mcp_config_path_policy: {}", mcp_config.config_path_policy);
-    if let Some(config_path) = &mcp_config.config_path {
-        println!("mcp_config: {config_path}");
-    }
-    if let Some(site_mcp_fabric) = &mcp_config.site_mcp_fabric {
-        println!("site_mcp_fabric: {site_mcp_fabric}");
-    }
-    if let Some(reason) = &mcp_config.refusal_reason {
-        println!("mcp_refusal: {reason}");
-    }
-    println!("terminal_status: {}", terminal_config.status.as_str());
-    println!(
-        "terminal_rendering_enabled: {}",
-        terminal_config.terminal_rendering_enabled
-    );
-    if let Some(mode) = &terminal_config.mode {
-        println!("terminal_mode: {mode}");
-    }
-    if let Some(reason) = &terminal_config.refusal_reason {
-        println!("terminal_refusal: {reason}");
-    }
-}
-
-fn runtime_config_snapshot_from_process_env() -> RuntimeConfigSnapshot {
-    let env_map = env::vars()
-        .filter(|(key, _)| key.starts_with("NARADA_"))
-        .collect::<BTreeMap<_, _>>();
-    RuntimeConfigSnapshot::from_process_env_map(&env_map)
-}
-
-fn runtime_config_snapshot_for_explicit_terminal_mode(mode: &str) -> RuntimeConfigSnapshot {
-    let mut snapshot = runtime_config_snapshot_from_process_env();
-    snapshot.terminal = TerminalRuntimeConfig::configured_for_explicit_terminal_mode(mode);
-    snapshot
-}
-
-fn terminal_config_for_explicit_terminal_mode(mode: &str) -> TerminalRuntimeConfig {
-    runtime_config_snapshot_for_explicit_terminal_mode(mode).terminal
-}
-
-fn run_render_once(args: Args) -> Result<(), String> {
-    let terminal_config = terminal_config_for_explicit_terminal_mode("render_once");
-    assert_terminal_rendering_admitted(&terminal_config, "render_once")?;
-    let model = build_scaffold_app_view_with_terminal_mode(&args, "render_once")?;
-    let mut session = TerminalSession::enter()?;
-    session.draw_once(&model)?;
-    session.leave()
-}
-
-fn run_interactive_loop(args: Args) -> Result<(), String> {
-    let terminal_config = terminal_config_for_explicit_terminal_mode("interactive_loop");
-    assert_terminal_interactive_loop_admitted(&terminal_config)?;
-    let max_steps = args.max_steps.expect("validated max steps");
-    let mut runtime = build_interactive_runtime(&args)?;
-    let mut clock = RuntimeClock::system_now()?;
-    let mut loop_state = AgentTuiLoopState::default();
-    let mut input_reader = CrosstermTerminalInputReader;
-    let mut input = TerminalInputTickSource {
-        reader: &mut input_reader,
-        wait: Duration::from_millis(INTERACTIVE_INPUT_IDLE_WAIT_MS),
-    };
-    let mut clock_source = RuntimeClockInteractiveSource { clock: &mut clock };
-    let mut terminal = TerminalSession::enter()?;
-
-    run_injected_interactive_loop(
-        &mut runtime,
-        &mut loop_state,
-        &mut terminal,
-        &mut input,
-        &mut clock_source,
-        max_steps,
-    )?;
-    terminal.leave()
-}
-
-fn assert_terminal_interactive_loop_admitted(config: &TerminalRuntimeConfig) -> Result<(), String> {
-    assert_terminal_rendering_admitted(config, "interactive_loop")
-}
-
-fn assert_terminal_rendering_admitted(
-    config: &TerminalRuntimeConfig,
-    requested_mode: &str,
-) -> Result<(), String> {
-    if !config.terminal_rendering_enabled {
-        let reason = config
-            .refusal_reason
-            .as_deref()
-            .unwrap_or("terminal_rendering_not_enabled");
-        return Err(format!(
-            "terminal_{requested_mode}_not_admitted:status={}:reason={reason}",
-            config.status.as_str()
-        ));
-    }
-    if config.mode.as_deref() != Some(requested_mode) {
-        return Err(format!(
-            "terminal_{requested_mode}_not_admitted:status={}:reason=wrong_terminal_mode:{}",
-            config.status.as_str(),
-            config.mode.as_deref().unwrap_or("none")
-        ));
-    }
-    Ok(())
-}
-
-fn build_interactive_runtime(args: &Args) -> Result<AgentTuiInteractiveRuntime, String> {
-    let identity = args.identity.clone().unwrap_or_default();
-    let session = args.session.clone().unwrap_or_default();
-    let control_jsonl = args.control_jsonl.clone().expect("validated control jsonl");
-    let session_jsonl = args.session_jsonl.clone().expect("validated session jsonl");
-    let context = build_evidence_context(args);
-    let runtime_config = runtime_config_snapshot_for_explicit_terminal_mode("interactive_loop");
-    let runtime_posture = runtime_config.posture();
-    let provider_tool_call_executor = provider_tool_call_executor_from_mcp_runtime_config(
-        &session_jsonl,
-        context.clone(),
-        &runtime_config.mcp,
-    )?;
-    let codex_mcp_isolation =
-        CodexMcpIsolation::from_mcp_runtime_config(&runtime_config.mcp, &context)?;
-    Ok(
-        AgentTuiInteractiveRuntime::with_provider_adapter_tool_executor_and_state(
-            identity,
-            session,
-            control_jsonl,
-            session_jsonl,
-            context,
-            provider_adapter_from_runtime_config_with_codex_mcp_isolation(
-                runtime_config.provider,
-                runtime_config.provider_adapter,
-                codex_mcp_isolation,
-            ),
-            provider_tool_call_executor,
-            runtime_posture,
-        ),
-    )
-}
-#[allow(dead_code)]
-fn build_interactive_app_view(
-    runtime: &AgentTuiInteractiveRuntime,
-    loop_state: &AgentTuiLoopState,
-) -> Result<AppViewModel, String> {
-    let terminal_size = current_terminal_size()?;
-    Ok(runtime.build_view(
-        terminal_size,
-        &loop_state.draft_state(),
-        loop_state.last_error.clone(),
-    ))
-}
-
-fn build_evidence_context(args: &Args) -> SessionEvidenceContext {
-    let identity = args.identity.clone().unwrap_or_default();
-    let session = args.session.clone().unwrap_or_default();
-    let site_root = args.site_root.clone().expect("validated site root");
-    let site_id = derive_site_id(&identity);
-    SessionEvidenceContext {
-        carrier_session_id: session,
-        agent_id: identity,
-        site_id,
-        site_root: site_root.display().to_string(),
-    }
-}
-
-fn build_scaffold_app_view_with_terminal_mode(
-    args: &Args,
-    mode: &str,
-) -> Result<AppViewModel, String> {
-    build_scaffold_app_view_with_runtime_config(
-        args,
-        runtime_config_snapshot_for_explicit_terminal_mode(mode),
-    )
-}
-
-fn build_scaffold_app_view_with_runtime_config(
-    args: &Args,
-    runtime_config: RuntimeConfigSnapshot,
-) -> Result<AppViewModel, String> {
-    let identity = args.identity.clone().unwrap_or_default();
-    let session = args.session.clone().unwrap_or_default();
-    Ok(build_app_view(&AppViewInput {
-        terminal_size: current_terminal_size()?,
-        layout_config: LayoutConfig::default(),
-        transcript_items: Vec::new(),
-        status: StatusViewInput {
-            identity: identity.clone(),
-            session,
-            turn_state: TurnState::Idle,
-            active_phase: None,
-            active_turn_age: None,
-            queued_inputs: 0,
-            held_system_directives: 0,
-            oldest_held_age: None,
-            transcript_items: 0,
-            runtime_posture: runtime_config.posture(),
-            last_error: None,
-        },
-        composer: ComposerViewInput {
-            identity,
-            draft_text: String::new(),
-            turn_state: TurnState::Idle,
-            queued_operator_notes: 0,
-            held_system_directives: 0,
-        },
-    }))
-}
-
-fn current_terminal_size() -> Result<TerminalSize, String> {
-    let (width, height) = crossterm::terminal::size()
-        .map_err(|error| format!("terminal_size_read_failed:{error}"))?;
-    Ok(TerminalSize { width, height })
-}
-
-fn derive_site_id(identity: &str) -> String {
-    identity
-        .rsplit_once('.')
-        .map(|(site, _)| site.to_string())
-        .unwrap_or_else(|| "unknown-site".to_string())
-}
-
 fn print_help() {
-    let launch_slice_flag = launch_slice_contract().carrier_flag.as_str();
     println!(
-        "narada-agent-tui {VERSION}\n\nUsage:\n  narada-agent-tui --identity <agent-id> --session <carrier-session-id> --site-root <path> --control-jsonl <path> --session-jsonl <path> {launch_slice_flag} --max-steps <n>\n  narada-agent-tui --identity <agent-id> --session <carrier-session-id> --site-root <path> --render-once\n\nOptions:\n  --identity <agent-id>          Agent identity, e.g. sonar.resident\n  --session <carrier-session>    Carrier session id\n  --site-root <path>             Narada site root\n  --control-jsonl <path>         Carrier control JSONL path\n  --session-jsonl <path>         Carrier session JSONL path\n  {launch_slice_flag:<29} Run bounded terminal interactive-loop passes and exit\n  --max-steps <n>                Required positive step count for interactive loop\n  --render-once                  Enter TUI mode, draw one scaffold frame, and exit\n  --composer-has-draft           Hold composer-clear system directives during runtime pass\n  --check-rust-toolchain         Check cargo and MSVC link.exe readiness for Rust tests\n  --version                      Print version\n  --help                         Show help\n\nStatus:\n  Agent TUI runtime is terminal interactive-loop only. Legacy non-terminal runtime and smoke flags have been removed."
+        "narada-agent-tui {VERSION}\n\nUsage:\n  narada-agent-tui --attach <event_endpoint> [--identity <agent-id>] [--session <session-id>]\n  narada-agent-tui --launch-binding <path> [--identity <agent-id>] [--session <session-id>]\n\nOptions:\n  --attach <event-endpoint>      Attach directly to the NARS session WebSocket endpoint\n  --launch-binding <path>        Wait for the exact NARS endpoint published for a launcher binding\n  --identity <agent-id>          Optional identity fallback; normally discovered from events\n  --session <session-id>         Optional session fallback; normally discovered from events\n  --max-steps <n>                Optional bounded loop count for tests\n  --check-rust-toolchain         Check cargo and MSVC link.exe readiness for Rust tests\n  --version                      Print version\n  --help                         Show help\n\nStatus:\n  Agent TUI is a Ratatui projection client. NARS owns provider, MCP, session, turn, and durable event state."
     );
 }
 fn validate_launch_args(args: &Args) -> Result<(), String> {
     if args.check_rust_toolchain {
         return Ok(());
     }
-    if args.identity.as_deref().unwrap_or("").trim().is_empty() {
-        return Err("missing required --identity".to_string());
+    let has_attach = args
+        .attach
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty());
+    let has_binding = args
+        .launch_binding
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty());
+    if has_attach == has_binding {
+        return Err(
+            "exactly one of --attach <event_endpoint> or --launch-binding <path> is required"
+                .to_string(),
+        );
     }
-    if args.session.as_deref().unwrap_or("").trim().is_empty() {
-        return Err("missing required --session".to_string());
-    }
-    if args.site_root.is_none() {
-        return Err("missing required --site-root".to_string());
-    }
-    let selected_modes = [args.interactive_loop, args.render_once]
-        .iter()
-        .filter(|selected| **selected)
-        .count();
-    if selected_modes > 1 {
-        return Err("choose only one runtime mode".to_string());
-    }
-    if args.interactive_loop {
-        if args.control_jsonl.is_none() {
-            return Err("runtime mode requires --control-jsonl".to_string());
+    if let Some(value) = args.max_steps {
+        if value == 0 {
+            return Err("--max-steps must be greater than zero".to_string());
         }
-        if args.session_jsonl.is_none() {
-            return Err("runtime mode requires --session-jsonl".to_string());
-        }
-    }
-    if args.interactive_loop {
-        match args.max_steps {
-            Some(value) if value > 0 => {}
-            _ => return Err("loop mode requires --max-steps > 0".to_string()),
-        }
-    } else if args.max_steps.is_some() {
-        return Err("--max-steps requires a loop mode".to_string());
     }
     Ok(())
 }
@@ -477,31 +173,27 @@ where
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
+            "--attach" => parsed.attach = Some(require_value(&mut iter, "--attach")?),
+            "--launch-binding" => {
+                parsed.launch_binding = Some(require_value(&mut iter, "--launch-binding")?)
+            }
             "--identity" => parsed.identity = Some(require_value(&mut iter, "--identity")?),
             "--session" => parsed.session = Some(require_value(&mut iter, "--session")?),
-            "--site-root" => {
-                parsed.site_root = Some(PathBuf::from(require_value(&mut iter, "--site-root")?))
-            }
-            "--control-jsonl" => {
-                parsed.control_jsonl =
-                    Some(PathBuf::from(require_value(&mut iter, "--control-jsonl")?))
-            }
-            "--session-jsonl" => {
-                parsed.session_jsonl =
-                    Some(PathBuf::from(require_value(&mut iter, "--session-jsonl")?))
-            }
             "--runtime-step-once"
             | "--runtime-loop"
             | "--interactive-step-once"
             | "--interactive-smoke-loop"
-            | "--persistent-smoke-session" => {
+            | "--persistent-smoke-session"
+            | "--interactive-loop"
+            | "--render-once"
+            | "--site-root"
+            | "--control-jsonl"
+            | "--session-jsonl"
+            | "--composer-has-draft" => {
                 return Err(format!(
-                    "{arg} has been removed; use {} for terminal server runtime",
-                    launch_slice_contract().carrier_flag
+                    "{arg} has been removed; attach to NARS with --attach <event_endpoint>"
                 ));
             }
-            flag if flag == launch_slice_contract().carrier_flag => parsed.interactive_loop = true,
-            "--render-once" => parsed.render_once = true,
             "--max-steps" => {
                 let value = require_value(&mut iter, "--max-steps")?;
                 parsed.max_steps = Some(
@@ -510,7 +202,6 @@ where
                         .map_err(|_| "invalid --max-steps".to_string())?,
                 );
             }
-            "--composer-has-draft" => parsed.composer_has_draft = true,
             "--check-rust-toolchain" => parsed.check_rust_toolchain = true,
             "--help" | "-h" => parsed.help = true,
             "--version" | "-V" => parsed.version = true,
@@ -538,87 +229,43 @@ mod tests {
     }
 
     #[test]
-    fn parses_required_identity_session_and_site_root() {
+    fn parses_nars_attach_arguments() {
         let args = parse(&[
+            "--attach",
+            "ws://127.0.0.1:12345/events",
             "--identity",
             "sonar.resident",
             "--session",
-            "carrier_1",
-            "--site-root",
-            "D:/code/narada.sonar",
-        ])
-        .expect("args parse");
-
-        assert_eq!(args.identity.as_deref(), Some("sonar.resident"));
-        assert_eq!(args.session.as_deref(), Some("carrier_1"));
-        assert_eq!(args.site_root, Some(PathBuf::from("D:/code/narada.sonar")));
-        assert!(!args.interactive_loop);
-        assert!(!args.render_once);
-    }
-
-    #[test]
-    fn parses_runtime_file_paths_and_interactive_loop_flag() {
-        let args = parse(&[
-            "--identity",
-            "sonar.resident",
-            "--session",
-            "carrier_1",
-            "--site-root",
-            "D:/code/narada.sonar",
-            "--control-jsonl",
-            "control.jsonl",
-            "--session-jsonl",
-            "session.jsonl",
-            "--interactive-loop",
+            "session_1",
             "--max-steps",
             "3",
-            "--composer-has-draft",
         ])
         .expect("args parse");
 
-        assert_eq!(args.control_jsonl, Some(PathBuf::from("control.jsonl")));
-        assert_eq!(args.session_jsonl, Some(PathBuf::from("session.jsonl")));
-        assert!(args.interactive_loop);
+        assert_eq!(args.attach.as_deref(), Some("ws://127.0.0.1:12345/events"));
+        assert_eq!(args.identity.as_deref(), Some("sonar.resident"));
+        assert_eq!(args.session.as_deref(), Some("session_1"));
         assert_eq!(args.max_steps, Some(3));
-        assert!(args.composer_has_draft);
+        validate_launch_args(&args).expect("attach arguments validate");
     }
 
     #[test]
-    fn rejects_removed_non_terminal_runtime_flags() {
+    fn rejects_removed_runtime_flags() {
         for flag in [
             "--runtime-step-once",
             "--runtime-loop",
             "--interactive-step-once",
             "--interactive-smoke-loop",
             "--persistent-smoke-session",
+            "--interactive-loop",
+            "--render-once",
+            "--control-jsonl",
+            "--session-jsonl",
         ] {
             let err = parse(&[flag]).expect_err("removed flag rejected");
             assert!(err.contains("has been removed"), "{flag}: {err}");
-            assert!(err.contains("--interactive-loop"), "{flag}: {err}");
+            assert!(err.contains("--attach"), "{flag}: {err}");
         }
-    }
-
-    #[test]
-    fn parses_interactive_loop_mode() {
-        let args = parse(&[
-            "--identity",
-            "sonar.resident",
-            "--session",
-            "carrier_1",
-            "--site-root",
-            "D:/code/narada.sonar",
-            "--control-jsonl",
-            "control.jsonl",
-            "--session-jsonl",
-            "session.jsonl",
-            "--interactive-loop",
-            "--max-steps",
-            "5",
-        ])
-        .expect("args parse");
-
-        assert!(args.interactive_loop);
-        assert_eq!(args.max_steps, Some(5));
     }
 
     #[test]
@@ -627,6 +274,14 @@ mod tests {
 
         assert!(args.check_rust_toolchain);
         validate_launch_args(&args).expect("toolchain check bypasses launch identity");
+    }
+
+    #[test]
+    fn parses_launch_binding_arguments() {
+        let args = parse(&["--launch-binding", "C:\\binding.json"]).expect("args parse");
+
+        assert_eq!(args.launch_binding.as_deref(), Some("C:\\binding.json"));
+        validate_launch_args(&args).expect("binding arguments validate");
     }
 
     #[test]
@@ -647,55 +302,11 @@ mod tests {
     }
 
     #[test]
-    fn parses_render_once_mode() {
-        let args = parse(&[
-            "--identity",
-            "sonar.resident",
-            "--session",
-            "carrier_1",
-            "--site-root",
-            "D:/code/narada.sonar",
-            "--render-once",
-        ])
-        .expect("args parse");
-
-        assert!(args.render_once);
-    }
-
-    #[test]
-    fn requires_identity_session_and_site_root() {
+    fn requires_attach_source() {
         let err = validate_launch_args(&Args::default()).expect_err("invalid args");
-        assert_eq!(err, "missing required --identity");
-    }
-
-    #[test]
-    fn interactive_loop_requires_control_and_session_paths() {
-        let args = Args {
-            identity: Some("sonar.resident".to_string()),
-            session: Some("carrier_1".to_string()),
-            site_root: Some(PathBuf::from("D:/code/narada.sonar")),
-            interactive_loop: true,
-            ..Args::default()
-        };
-
-        let err = validate_launch_args(&args).expect_err("invalid runtime args");
-        assert_eq!(err, "runtime mode requires --control-jsonl");
-    }
-
-    #[test]
-    fn rejects_multiple_runtime_modes() {
-        let args = Args {
-            identity: Some("sonar.resident".to_string()),
-            session: Some("carrier_1".to_string()),
-            site_root: Some(PathBuf::from("D:/code/narada.sonar")),
-            control_jsonl: Some(PathBuf::from("control.jsonl")),
-            session_jsonl: Some(PathBuf::from("session.jsonl")),
-            interactive_loop: true,
-            render_once: true,
-            ..Args::default()
-        };
-
-        let err = validate_launch_args(&args).expect_err("invalid runtime args");
-        assert_eq!(err, "choose only one runtime mode");
+        assert_eq!(
+            err,
+            "exactly one of --attach <event_endpoint> or --launch-binding <path> is required"
+        );
     }
 }

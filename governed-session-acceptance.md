@@ -2,57 +2,39 @@
 
 ## Purpose
 
-This acceptance verifies that `agent-tui` can run a governed provider-backed session while keeping provider execution, MCP execution, and terminal rendering as explicit launch admissions.
+Verify that a governed provider-backed session remains owned by NARS while `agent-tui` provides the operator projection and composer.
 
 ## Canonical launch
 
-Run from `D:\code\narada`:
+Run the Narada workspace launcher with the `narada-agent-runtime-server` runtime, the intended intelligence provider, and the `agent-tui` projection selected. Start the TUI from the emitted projection tab. For a direct attach, use the launch binding created by the launcher:
 
 ```powershell
-pwsh -File .\narada.ps1 agent-start -Agent narada.resident -Runtime agent-tui -Exec -AgentTuiInteractiveLoop -AgentTuiProviderExecution -AgentTuiMcpFabric -AgentTuiMaxSteps 10000
+cargo run --manifest-path D:\code\agent-tui\Cargo.toml --bin narada-agent-tui -- --launch-binding <launch-binding-path> --identity <canonical-agent-id>
 ```
 
-Do not use `-Json` for operator UX inspection.
-
-## Expected launch posture
-
-The launch result must show:
-
-- `agent_tui_launch.provider_execution_enabled: true`
-- `agent_tui_launch.mcp_fabric_access_enabled: true`
-- provider gate status `admitted_by_explicit_governed_session_flag`
-- MCP gate status `admitted_by_explicit_governed_session_flag`
-- terminal rendering admitted for `interactive_loop`
-- native shell authority still false/unadmitted
+The binding must resolve to the NARS WebSocket event endpoint. Do not pass the removed provider, MCP, interactive-loop, control-JSONL, or session-JSONL flags.
 
 ## Manual scenario
 
-1. Launch with the canonical command.
-2. Enter `run startup sequence`.
-3. If the provider emits text, confirm it appears under the agent identity in the transcript.
-4. If the provider emits a Narada tool-call request, confirm the TUI shows carrier-mediated request/result flow:
-   - `agent -> agent-tui`
-   - `agent-tui -> agent`
-5. While the turn is active, type an operator draft without submitting.
-6. Append a system control input to `control.jsonl`.
-7. Confirm held system directive count is visible while the draft is nonempty.
-8. Submit or clear the draft and confirm the held system input releases.
-9. Exit with `Ctrl+C` and confirm PowerShell is normal.
+1. Start the NARS-backed workspace and the emitted TUI projection.
+2. Enter `run startup sequence` or another authorized task.
+3. Confirm provider text, tool-call, tool-result, and completion events appear as transcript projections when NARS emits them.
+4. While the turn is active, type an operator draft without submitting it.
+5. Confirm the draft remains local to the composer and does not change the durable transcript until submitted.
+6. Submit the draft and confirm the request is reflected by the NARS event stream.
+7. Scroll upward beyond the initial replay page and confirm older events are fetched from NARS, not from a local session file.
+8. Exit with `Esc` or `Ctrl+C` and confirm terminal cleanup.
 
 ## Evidence checks
 
-Inspect `session.jsonl` and verify:
+- Provider and MCP subprocess ownership remains NARS-owned.
+- TUI outbound protocol is limited to event subscription/history reads and session submit/cancel/close requests.
+- Reconnect resumes from the last durable sequence and does not duplicate transcript items.
+- Provider, MCP, terminal-authority, and turn-lifecycle status is not locally admitted or executed by the TUI.
+- Operator input is submitted through NARS and then appears from the event stream.
+- No TUI read or write occurs against `control.jsonl` or `session.jsonl`.
+- The legacy runtime flags are rejected by the TUI CLI.
 
-- provider request status is not `recorded_not_dispatched` for the governed turn
-- `provider_execution_enabled` is `true`
-- provider adapter admission status is `admitted`
-- provider adapter kind is `codex_subscription_adapter`
-- provider text deltas or provider tool-call requests are recorded
-- MCP `tool_call_requested` and `tool_result_received` appear only when the requested tool is policy-visible
-- operator input remains `source_kind=operator` and `transport=interactive_terminal`
-- system input remains `source_kind=system` and `transport=control_jsonl`
-- no native shell authority is recorded as admitted
+## Known boundary
 
-## Known limits
-
-The first production adapter uses bounded `codex exec --json` semantics. It does not grant native Codex tool execution; Narada tool use remains carrier-mediated through `agent-tui` and Site MCP fabric policy.
+This acceptance validates the projection boundary. Provider policy, tool authorization, MCP execution, terminal authority, checkpointing, and durable session semantics must be validated through NARS-owned diagnostics and event records.
