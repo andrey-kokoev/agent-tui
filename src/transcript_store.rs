@@ -55,6 +55,18 @@ impl TranscriptStore {
         self.items.clear();
     }
 
+    pub fn append_local_notice(&mut self, text: impl Into<String>) {
+        self.items.push(TranscriptItem {
+            kind: TranscriptItemKind::LocalNotice,
+            actor: crate::transcript_projection::TranscriptActor::AgentTui,
+            turn_id: String::new(),
+            text: text.into(),
+            sequence: None,
+            projection_key: None,
+            occurred_at: None,
+        });
+    }
+
     pub fn ingest_event(&mut self, event: &SessionEvent) -> TranscriptIngestResult {
         self.ingest_event_at(event, false)
     }

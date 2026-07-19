@@ -23,6 +23,86 @@ pub enum SourceKind {
     External,
 }
 
+fn require_payload_object(payload: &Value, field: &str) -> Result<(), String> {
+    match payload.get(field) {
+        Some(Value::Object(_)) => Ok(()),
+        _ => Err(format!("payload.invalid_{field}")),
+    }
+}
+
+fn validate_directive_emission_authorized_payload(payload: &Value) -> Result<(), String> {
+    require_payload_fields(
+        payload,
+        &[
+            "authorization_id",
+            "directive_kind",
+            "cadence",
+            "authorized_emitter",
+            "authority",
+            "status",
+        ],
+    )?;
+    require_payload_nonempty_string(payload, "authorization_id")?;
+    require_payload_nonempty_string(payload, "directive_kind")?;
+    require_payload_nonempty_string(payload, "cadence")?;
+    require_payload_object(payload, "authorized_emitter")?;
+    require_payload_object(payload, "authority")?;
+    require_payload_nonempty_string(payload, "status")
+}
+
+fn validate_directive_emission_rule_recorded_payload(payload: &Value) -> Result<(), String> {
+    require_payload_fields(
+        payload,
+        &[
+            "rule_id",
+            "authorization_id",
+            "directive_kind",
+            "cadence",
+            "visibility",
+            "status",
+        ],
+    )?;
+    for field in [
+        "rule_id",
+        "authorization_id",
+        "directive_kind",
+        "cadence",
+        "visibility",
+        "status",
+    ] {
+        require_payload_nonempty_string(payload, field)?;
+    }
+    Ok(())
+}
+
+fn validate_directive_emitted_payload(payload: &Value) -> Result<(), String> {
+    require_payload_fields(
+        payload,
+        &[
+            "authorization_id",
+            "rule_id",
+            "directive_kind",
+            "cadence",
+            "visibility",
+            "input_event_id",
+            "directive_id",
+            "emitted_at",
+        ],
+    )?;
+    for field in [
+        "authorization_id",
+        "rule_id",
+        "directive_kind",
+        "cadence",
+        "visibility",
+        "input_event_id",
+        "directive_id",
+    ] {
+        require_payload_nonempty_string(payload, field)?;
+    }
+    require_payload_rfc3339(payload, "emitted_at")
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Transport {
@@ -57,6 +137,9 @@ pub enum SessionEventKind {
     InputCompleted,
     SystemDirectiveHeld,
     SystemDirectiveReleased,
+    DirectiveEmissionAuthorized,
+    DirectiveEmissionRuleRecorded,
+    DirectiveEmitted,
     DirectiveReceiptRecorded,
     DirectiveCarrierAcceptedRecorded,
     TurnStarted,
@@ -94,6 +177,9 @@ pub const SESSION_EVENT_KINDS: &[SessionEventKind] = &[
     SessionEventKind::InputCompleted,
     SessionEventKind::SystemDirectiveHeld,
     SessionEventKind::SystemDirectiveReleased,
+    SessionEventKind::DirectiveEmissionAuthorized,
+    SessionEventKind::DirectiveEmissionRuleRecorded,
+    SessionEventKind::DirectiveEmitted,
     SessionEventKind::DirectiveReceiptRecorded,
     SessionEventKind::DirectiveCarrierAcceptedRecorded,
     SessionEventKind::TurnStarted,
@@ -453,6 +539,13 @@ fn validate_session_payload(kind: &SessionEventKind, payload: &Value) -> Result<
         SessionEventKind::SystemDirectiveReleased => {
             validate_system_directive_released_payload(payload)
         }
+        SessionEventKind::DirectiveEmissionAuthorized => {
+            validate_directive_emission_authorized_payload(payload)
+        }
+        SessionEventKind::DirectiveEmissionRuleRecorded => {
+            validate_directive_emission_rule_recorded_payload(payload)
+        }
+        SessionEventKind::DirectiveEmitted => validate_directive_emitted_payload(payload),
         SessionEventKind::DirectiveReceiptRecorded
         | SessionEventKind::DirectiveCarrierAcceptedRecorded => {
             require_payload_fields(payload, &["input_event_id", "directive_id"])

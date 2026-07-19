@@ -19,6 +19,33 @@ pub enum CarrierCommand {
     Unknown { command: String },
 }
 
+impl CarrierCommand {
+    pub fn nars_command(&self) -> Option<(String, Option<String>)> {
+        let command = match self {
+            Self::Status => "/status".to_string(),
+            Self::Goal { value } => return Some(("/goal".to_string(), value.clone())),
+            Self::Stats { value } => return Some(("/stats".to_string(), value.clone())),
+            Self::Model { value } => return Some(("/model".to_string(), value.clone())),
+            Self::Thinking { value } => return Some(("/thinking".to_string(), value.clone())),
+            Self::ToolOutput { value } => {
+                return Some(("/tool-output".to_string(), value.clone()));
+            }
+            Self::Tools { value } => return Some(("/tools".to_string(), value.clone())),
+            Self::Observers => "/observers".to_string(),
+            Self::ObserverMute => "/observer mute".to_string(),
+            Self::ObserverUnmute => "/observer unmute".to_string(),
+            Self::QueueShow => "/queue".to_string(),
+            Self::QueueClear => "/queue clear".to_string(),
+            Self::QueueDrop { index } => {
+                return Some(("/queue drop".to_string(), Some(index.to_string())));
+            }
+            Self::Unknown { .. } => return None,
+            Self::Help | Self::Clear | Self::Exit => return None,
+        };
+        Some((command, None))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OperatorSubmit {
     CarrierCommand(CarrierCommand),
@@ -302,11 +329,19 @@ mod tests {
 
     #[test]
     fn unknown_slash_text_is_local_command_feedback_not_agent_input() {
+        let parsed = parse_operator_submit("/wat");
         assert_eq!(
-            parse_operator_submit("/wat"),
+            parsed,
             OperatorSubmit::CarrierCommand(CarrierCommand::Unknown {
                 command: "/wat".to_string()
             })
+        );
+        assert_eq!(
+            match parsed {
+                OperatorSubmit::CarrierCommand(command) => command.nars_command(),
+                _ => panic!("unknown slash input must remain a carrier command"),
+            },
+            None
         );
     }
 }

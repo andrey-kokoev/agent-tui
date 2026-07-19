@@ -1,4 +1,5 @@
 use crate::app_view_model::{AppViewInput, AppViewModel, build_app_view};
+use crate::carrier_command::{CarrierCommand, OperatorSubmit, parse_operator_submit};
 use crate::carrier_protocol::{SessionEvent, SessionEventKind, session_event_schema};
 use crate::composer_view_model::ComposerViewInput;
 use crate::layout_model::{LayoutConfig, TerminalSize};
@@ -30,6 +31,20 @@ pub struct LaunchBindingResolution {
     pub event_endpoint: String,
     pub identity: Option<String>,
     pub session: Option<String>,
+}
+
+fn local_help_text() -> String {
+    [
+        "Commands",
+        "/help  /status  /goal [text|pause|resume|clear]  /stats [args]",
+        "/model [name]  /thinking [none|low|medium|high]",
+        "/tool-output [on|off|toggle|status]  /tools [filter]",
+        "/observers  /observer mute|unmute",
+        "/queue  /queue clear  /queue drop <index>",
+        "/clear  /exit  /quit  exit",
+        "Ordinary text is submitted with session.submit.",
+    ]
+    .join("\n")
 }
 
 pub fn resolve_event_endpoint_from_launch_binding(
@@ -787,6 +802,16 @@ impl NarsProjectionClient {
         self.send_request("session.submit", params)
     }
 
+    pub fn command(&mut self, command: &str, value: Option<&str>) -> Result<(), String> {
+        self.send_request(
+            "session.command.execute",
+            json!({
+                "command": command,
+                "value": value.unwrap_or(""),
+            }),
+        )
+    }
+
     pub fn cancel(&mut self) -> Result<(), String> {
         self.send_request("session.cancel", json!({"reason": "operator_interrupt"}))
     }
@@ -869,6 +894,13 @@ fn event_kind(name: &str) -> SessionEventKind {
         }
         "system_directive_held" => SessionEventKind::SystemDirectiveHeld,
         "system_directive_released" => SessionEventKind::SystemDirectiveReleased,
+        "directive_emission_authorized" => SessionEventKind::DirectiveEmissionAuthorized,
+        "directive_emission_rule_recorded" => SessionEventKind::DirectiveEmissionRuleRecorded,
+        "directive_emitted" => SessionEventKind::DirectiveEmitted,
+        "directive_receipt_recorded" => SessionEventKind::DirectiveReceiptRecorded,
+        "directive_carrier_accepted_recorded" => {
+            SessionEventKind::DirectiveCarrierAcceptedRecorded
+        }
         "turn_started" | "carrier_turn_started" => SessionEventKind::TurnStarted,
         "provider_request" | "provider_request_recorded" => {
             SessionEventKind::ProviderRequestRecorded
@@ -884,6 +916,8 @@ fn event_kind(name: &str) -> SessionEventKind {
         "tool_result" | "carrier_tool_completed" | "tool_result_received" => {
             SessionEventKind::ToolResultReceived
         }
+        "command_result" | "carrier_command_result" | "session_command_result"
+        | "carrier_command_executed" => SessionEventKind::CarrierCommandExecuted,
         "turn_completed" | "turn_complete" | "carrier_turn_completed" => {
             SessionEventKind::TurnCompleted
         }
@@ -1243,8 +1277,40 @@ pub fn run_attached_projection(
             TerminalInputTickOutcome::DraftEffect(
                 crate::composer_draft::ComposerDraftEffect::SubmitRequested { text },
             ) => {
-                if let Err(error) = state.client.submit(&text, state.active_turn_id.as_deref()) {
-                    state.last_error = Some(error);
+                match parse_operator_submit(&text) {
+                    OperatorSubmit::Empty => {}
+                    OperatorSubmit::AgentInput(content) => {
+                        if let Err(error) =
+                            state.client.submit(&content, state.active_turn_id.as_deref())
+                        {
+                            state.last_error = Some(error);
+                        }
+                    }
+                    OperatorSubmit::CarrierCommand(command) => match command {
+                        CarrierCommand::Help => {
+                            state.transcript.append_local_notice(local_help_text());
+                        }
+                        CarrierCommand::Clear => {
+                            state.transcript.clear_projection();
+                            state.transcript_scroll_offset = 0;
+                        }
+                        CarrierCommand::Exit => {
+                            let _ = state.client.close();
+                            break Ok(());
+                        }
+                        CarrierCommand::Unknown { command } => {
+                            state
+                                .transcript
+                                .append_local_notice(format!("Unknown command: {command}. Type /help."));
+                        }
+                        command => {
+                            if let Some((command, value)) = command.nars_command()
+                                && let Err(error) = state.client.command(&command, value.as_deref())
+                            {
+                                state.last_error = Some(error);
+                            }
+                        }
+                    },
                 }
             }
             TerminalInputTickOutcome::DraftEffect(
@@ -1281,6 +1347,328 @@ pub fn run_attached_projection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::thread;
+
+    fn read_http_request(stream: &mut TcpStream) -> String {
+        let mut request = Vec::new();
+        loop {
+            let mut buffer = [0u8; 1024];
+            let count = stream.read(&mut buffer).expect("read websocket request");
+            assert!(count > 0, "websocket request closed before headers");
+            request.extend_from_slice(&buffer[..count]);
+            if find_bytes(&request, b"\r\n\r\n").is_some() {
+                break;
+            }
+        }
+        String::from_utf8(request).expect("websocket request is UTF-8")
+    }
+
+    fn server_handshake(stream: &mut TcpStream) {
+        let request = read_http_request(stream);
+        let key = request
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("sec-websocket-key")
+                    .then_some(value.trim())
+            })
+            .expect("client websocket key");
+        let response = format!(
+            "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n\r\n",
+            websocket_accept_value(key)
+        );
+        stream
+            .write_all(response.as_bytes())
+            .expect("write websocket handshake");
+    }
+
+    fn read_server_frame(stream: &mut TcpStream) -> Option<(u8, Vec<u8>)> {
+        let mut header = [0u8; 2];
+        if stream.read_exact(&mut header).is_err() {
+            return None;
+        }
+        let opcode = header[0] & 0x0F;
+        let masked = header[1] & 0x80 != 0;
+        let mut payload_length = (header[1] & 0x7F) as usize;
+        if payload_length == 126 {
+            let mut bytes = [0u8; 2];
+            stream.read_exact(&mut bytes).expect("read websocket length");
+            payload_length = u16::from_be_bytes(bytes) as usize;
+        } else if payload_length == 127 {
+            let mut bytes = [0u8; 8];
+            stream.read_exact(&mut bytes).expect("read websocket length");
+            payload_length = usize::try_from(u64::from_be_bytes(bytes))
+                .expect("websocket payload fits test process");
+        }
+        let mask = if masked {
+            let mut mask = [0u8; 4];
+            stream.read_exact(&mut mask).expect("read websocket mask");
+            Some(mask)
+        } else {
+            None
+        };
+        let mut payload = vec![0u8; payload_length];
+        stream
+            .read_exact(&mut payload)
+            .expect("read websocket payload");
+        if let Some(mask) = mask {
+            for (index, byte) in payload.iter_mut().enumerate() {
+                *byte ^= mask[index % 4];
+            }
+        }
+        Some((opcode, payload))
+    }
+
+    fn read_client_json(stream: &mut TcpStream) -> Option<Value> {
+        loop {
+            let (opcode, payload) = read_server_frame(stream)?;
+            if opcode == 0x8 {
+                return None;
+            }
+            if opcode == 0x1 {
+                return Some(serde_json::from_slice(&payload).expect("client websocket JSON"));
+            }
+        }
+    }
+
+    fn send_server_json(stream: &mut TcpStream, value: &Value) {
+        let payload = serde_json::to_vec(value).expect("server websocket JSON");
+        let mut frame = Vec::with_capacity(payload.len() + 10);
+        frame.push(0x81);
+        match payload.len() {
+            0..=125 => frame.push(payload.len() as u8),
+            126..=65_535 => {
+                frame.push(126);
+                frame.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+            }
+            length => {
+                frame.push(127);
+                frame.extend_from_slice(&(length as u64).to_be_bytes());
+            }
+        }
+        frame.extend_from_slice(&payload);
+        stream.write_all(&frame).expect("write server websocket JSON");
+    }
+
+    fn send_session_event(
+        stream: &mut TcpStream,
+        sequence: u64,
+        event: &str,
+        event_id: &str,
+        fields: Value,
+    ) {
+        let mut payload = fields.as_object().cloned().unwrap_or_default();
+        payload.insert("event".to_string(), json!(event));
+        payload.insert("event_id".to_string(), json!(event_id));
+        payload.insert("event_sequence".to_string(), json!(sequence));
+        send_server_json(
+            stream,
+            &json!({
+                "event": "session_event",
+                "cursor": { "sequence": sequence },
+                "payload": payload,
+            }),
+        );
+    }
+
+    fn assert_request_method(frame: &Value, method: &str) {
+        assert_eq!(frame.get("method").and_then(Value::as_str), Some(method));
+    }
+
+    #[test]
+    fn websocket_wire_harness_covers_replay_commands_history_dedup_and_reconnect() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind websocket harness");
+        let port = listener.local_addr().expect("websocket harness address").port();
+        let endpoint = format!("ws://127.0.0.1:{port}/events");
+        let server = thread::spawn(move || {
+            for connection_index in 0..2 {
+                let (mut stream, _) = listener.accept().expect("accept websocket client");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .expect("set websocket harness timeout");
+                server_handshake(&mut stream);
+                let subscribe = read_client_json(&mut stream).expect("subscribe request");
+                assert_request_method(&subscribe, "session.events.subscribe");
+                let subscribe_params = subscribe
+                    .get("params")
+                    .and_then(Value::as_object)
+                    .expect("subscribe params");
+                assert_eq!(subscribe_params.get("include_replay"), Some(&json!(true)));
+                if connection_index == 0 {
+                    assert!(subscribe_params.get("since_sequence").is_none());
+                    send_session_event(
+                        &mut stream,
+                        1,
+                        "user_message",
+                        "replay-1",
+                        json!({ "content": "replay one" }),
+                    );
+                    send_session_event(
+                        &mut stream,
+                        2,
+                        "user_message",
+                        "replay-1",
+                        json!({ "content": "duplicate replay one" }),
+                    );
+                    send_session_event(
+                        &mut stream,
+                        3,
+                        "assistant_message",
+                        "replay-2",
+                        json!({ "turn_id": "turn-1", "text": "replayed answer" }),
+                    );
+                    loop {
+                        let Some(frame) = read_client_json(&mut stream) else {
+                            break;
+                        };
+                        match frame.get("method").and_then(Value::as_str) {
+                            Some("session.submit") => {
+                                assert_eq!(
+                                    frame["params"]["content"],
+                                    "new operator input"
+                                );
+                                send_session_event(
+                                    &mut stream,
+                                    4,
+                                    "user_message",
+                                    "input-1",
+                                    json!({ "content": "new operator input" }),
+                                );
+                            }
+                            Some("session.command.execute") => {
+                                assert_eq!(frame["params"]["command"], "/tools");
+                                assert_eq!(frame["params"]["value"], "mcp");
+                                send_session_event(
+                                    &mut stream,
+                                    5,
+                                    "carrier_command_executed",
+                                    "command-1",
+                                    json!({
+                                        "command": "/tools",
+                                        "status": "ok",
+                                        "summary": "tools listed"
+                                    }),
+                                );
+                            }
+                            Some("session.events.read") => {
+                                assert_eq!(frame["params"]["before_sequence"], 1);
+                                send_session_event(
+                                    &mut stream,
+                                    6,
+                                    "session_started",
+                                    "live-during-history-read",
+                                    json!({}),
+                                );
+                                send_server_json(
+                                    &mut stream,
+                                    &json!({
+                                        "event": "session_events_read",
+                                        "request_id": frame["id"],
+                                        "events": [{
+                                            "event": "user_message",
+                                            "event_id": "history-0",
+                                            "event_sequence": 0,
+                                            "content": "older history"
+                                        }],
+                                        "has_more": false
+                                    }),
+                                );
+                            }
+                            Some("session.health") => break,
+                            other => panic!("unexpected first-connection method: {other:?}"),
+                        }
+                    }
+                } else {
+                    assert_eq!(subscribe_params.get("since_sequence"), Some(&json!(6)));
+                    send_session_event(
+                        &mut stream,
+                        7,
+                        "user_message",
+                        "reconnected-1",
+                        json!({ "content": "after reconnect" }),
+                    );
+                    loop {
+                        let Some(frame) = read_client_json(&mut stream) else {
+                            break;
+                        };
+                        if frame.get("method").and_then(Value::as_str) == Some("session.close") {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
+        let mut client = NarsProjectionClient::connect(&endpoint).expect("connect projection client");
+        let replay_deadline = Instant::now() + Duration::from_secs(2);
+        let replay = loop {
+            let events = client.poll().expect("poll replay");
+            if !events.is_empty() {
+                break events;
+            }
+            assert!(Instant::now() < replay_deadline, "replay did not arrive");
+            thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(
+            replay.iter().map(|event| event.event_id.as_str()).collect::<Vec<_>>(),
+            vec!["replay-1", "replay-2"]
+        );
+
+        client
+            .submit("new operator input", None)
+            .expect("submit over websocket");
+        client
+            .command("/tools", Some("mcp"))
+            .expect("command over websocket");
+        let history = client
+            .read_older_events()
+            .expect("read older events over websocket");
+        assert_eq!(
+            history
+                .older
+                .iter()
+                .map(|event| event.event_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["history-0"]
+        );
+        assert!(history.live.iter().any(|event| event.event_id == "input-1"));
+        assert!(history.live.iter().any(|event| event.event_id == "command-1"));
+        assert!(history
+            .live
+            .iter()
+            .any(|event| event.event_id == "live-during-history-read"));
+
+        client.health().expect("health request before reconnect");
+        let reset_deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match client.poll() {
+                Err(error) if error.starts_with("nars_attach_stream_reset:") => break,
+                Ok(_) => {
+                    assert!(Instant::now() < reset_deadline, "stream did not reconnect");
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("unexpected reconnect error: {error}"),
+            }
+        }
+        let reconnected_deadline = Instant::now() + Duration::from_secs(2);
+        let reconnected = loop {
+            let events = client.poll().expect("poll reconnected stream");
+            if !events.is_empty() {
+                break events;
+            }
+            assert!(
+                Instant::now() < reconnected_deadline,
+                "reconnected event did not arrive"
+            );
+            thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(reconnected[0].event_id, "reconnected-1");
+
+        client.close().expect("close projection client");
+        server.join().expect("websocket harness completes");
+    }
 
     #[test]
     fn parses_loopback_event_endpoint() {
@@ -1468,6 +1856,69 @@ mod tests {
         assert_eq!(resolution.event_endpoint, "ws://127.0.0.1:4567/events");
         assert_eq!(resolution.identity.as_deref(), Some("sonar.resident"));
         assert_eq!(resolution.session.as_deref(), Some("nars-session-1"));
+    }
+
+    #[test]
+    fn waits_for_session_record_after_launch_binding_is_ready() {
+        let root = std::env::temp_dir().join(format!(
+            "narada-agent-tui-delayed-launch-record-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        let sessions_root = root
+            .join(".narada")
+            .join("crew")
+            .join("nars-sessions");
+        fs::create_dir_all(&sessions_root).expect("create sessions root");
+        let binding_path = root.join("launch-binding.json");
+        fs::write(
+            &binding_path,
+            serde_json::to_vec(&json!({
+                "schema": "narada.operator_projection_launch_binding.v1",
+                "status": "ready",
+                "site_root": root,
+                "nars_session_id": "nars-session-delayed",
+                "agent": "sonar.resident"
+            }))
+            .expect("serialize delayed launch binding"),
+        )
+        .expect("write delayed launch binding");
+
+        let binding_path_for_thread = binding_path.clone();
+        let resolver = thread::spawn(move || {
+            resolve_event_endpoint_from_launch_binding(
+                binding_path_for_thread
+                    .to_str()
+                    .expect("binding path is UTF-8"),
+            )
+        });
+        thread::sleep(Duration::from_millis(150));
+
+        let record_dir = sessions_root.join("nars-session-delayed");
+        fs::create_dir_all(&record_dir).expect("create delayed session record directory");
+        fs::write(
+            record_dir.join("session-index-record.json"),
+            serde_json::to_vec(&json!({
+                "session_id": "nars-session-delayed",
+                "agent_id": "sonar.resident",
+                "event_endpoint": "ws://127.0.0.1:4568/events"
+            }))
+            .expect("serialize delayed session record"),
+        )
+        .expect("write delayed session record");
+
+        let resolution = resolver
+            .join()
+            .expect("delayed resolver joins")
+            .expect("delayed session record resolves");
+        let _ = fs::remove_dir_all(&root);
+
+        assert_eq!(resolution.event_endpoint, "ws://127.0.0.1:4568/events");
+        assert_eq!(resolution.identity.as_deref(), Some("sonar.resident"));
+        assert_eq!(resolution.session.as_deref(), Some("nars-session-delayed"));
     }
 
     #[test]

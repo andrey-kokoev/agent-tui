@@ -9,6 +9,29 @@ pub struct CarrierInputPipelineState {
     pub observer_muted: bool,
 }
 
+fn directive_visibility(input: &InputEvent) -> Option<&'static str> {
+    let is_directive = input.directive_id.is_some()
+        || input
+            .metadata
+            .get("directive")
+            .is_some_and(Value::is_object);
+    if !is_directive {
+        return None;
+    }
+    Some(match input
+        .metadata
+        .get("directive")
+        .and_then(|value| value.get("visibility"))
+        .and_then(Value::as_str)
+    {
+        Some("record_only") => "record_only",
+        Some("operator_visible") => "operator_visible",
+        Some("conversation_visible") => "conversation_visible",
+        Some("agent_visible") => "agent_visible",
+        _ => "agent_visible",
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CarrierInputPipelineAdmission {
     pub admission_action: &'static str,
@@ -16,6 +39,7 @@ pub struct CarrierInputPipelineAdmission {
     pub creates_turn: bool,
     pub complete_without_provider: bool,
     pub dispatch_to_provider: bool,
+    pub directive_visibility: Option<&'static str>,
     pub visible_to_operator: bool,
     pub suppression_reason: Option<&'static str>,
     pub queue_event_kinds: Vec<&'static str>,
@@ -32,6 +56,8 @@ pub fn classify_carrier_input_pipeline(
 ) -> CarrierInputPipelineAdmission {
     let is_observer = is_observer_input_event(input);
     let visibility = observer_visibility(input);
+    let directive_visibility = directive_visibility(input);
+    let is_record_only_directive = directive_visibility == Some("record_only");
     let observer_interjection = is_observer && visibility != "record_only";
     let observer_suppressed = observer_interjection && state.observer_muted;
     let observer_dispatch = is_observer
@@ -40,11 +66,14 @@ pub fn classify_carrier_input_pipeline(
     let visible_to_operator = is_observer
         && matches!(visibility, "operator_visible" | "conversation_visible")
         && !observer_suppressed;
-    let should_hold = is_system_directive(input)
+    let should_hold = !is_record_only_directive
+        && is_system_directive(input)
         && state.composer_has_draft
         && input.hold_condition == Some(HoldCondition::ComposerClearRequired);
     let admission_action = if should_hold {
         "hold"
+    } else if is_record_only_directive {
+        "admit"
     } else if input.delivery_mode == DeliveryMode::AdmitForCurrentTurn && state.active_turn {
         "reject"
     } else if input.delivery_mode == DeliveryMode::AdmitAfterActiveTurn && state.active_turn {
@@ -53,12 +82,15 @@ pub fn classify_carrier_input_pipeline(
         "admit"
     };
     let mut queue_event_kinds = Vec::new();
-    if input.delivery_mode == DeliveryMode::AdmitAfterActiveTurn {
+    if input.delivery_mode == DeliveryMode::AdmitAfterActiveTurn && !is_record_only_directive {
         queue_event_kinds.push("input_queued_for_turn_boundary");
     }
     let mut admission_event_kinds = Vec::new();
     let mut visible_event_kinds = Vec::new();
-    if is_observer {
+    if is_record_only_directive && admission_action == "admit" {
+        admission_event_kinds.push("directive_receipt_recorded");
+        admission_event_kinds.push("directive_carrier_accepted_recorded");
+    } else if is_observer {
         admission_event_kinds.push("observer_observation_recorded");
         if visibility != "record_only" {
             admission_event_kinds.push("observer_interjection_proposed");
@@ -74,12 +106,16 @@ pub fn classify_carrier_input_pipeline(
             }
         }
     }
-    let creates_turn = admission_action == "admit" && (!is_observer || observer_dispatch);
+    let creates_turn = !is_record_only_directive
+        && admission_action == "admit"
+        && (!is_observer || observer_dispatch);
     if creates_turn {
         admission_event_kinds.push("input_admitted_to_turn");
     }
-    let complete_without_provider =
-        admission_action == "admit" && is_observer && (!observer_dispatch || observer_suppressed);
+    let complete_without_provider = is_record_only_directive
+        || (admission_action == "admit"
+            && is_observer
+            && (!observer_dispatch || observer_suppressed));
     CarrierInputPipelineAdmission {
         admission_action,
         queue_state: if input.delivery_mode == DeliveryMode::AdmitAfterActiveTurn {
@@ -89,8 +125,9 @@ pub fn classify_carrier_input_pipeline(
         },
         creates_turn,
         complete_without_provider,
-        dispatch_to_provider: observer_dispatch,
-        visible_to_operator,
+        dispatch_to_provider: !is_record_only_directive && observer_dispatch,
+        directive_visibility,
+        visible_to_operator: !is_record_only_directive && visible_to_operator,
         suppression_reason: if observer_suppressed {
             Some("observer_muted")
         } else {
@@ -183,6 +220,7 @@ mod tests {
         creates_turn: bool,
         complete_without_provider: bool,
         dispatch_to_provider: bool,
+        directive_visibility: Option<String>,
         visible_to_operator: Option<bool>,
         suppression_reason: Option<String>,
         queue_event_kinds: Vec<String>,
@@ -269,6 +307,9 @@ mod tests {
                 "{}",
                 case.name
             );
+            if let Some(expected) = case.expected.directive_visibility.as_deref() {
+                assert_eq!(admission.directive_visibility, Some(expected), "{}", case.name);
+            }
             if let Some(expected) = case.expected.visible_to_operator {
                 assert_eq!(admission.visible_to_operator, expected, "{}", case.name);
             }

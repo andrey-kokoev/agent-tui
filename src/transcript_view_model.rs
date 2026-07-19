@@ -120,6 +120,7 @@ fn transcript_kind_slug(kind: &TranscriptItemKind) -> &'static str {
         TranscriptItemKind::ProviderToolCallRequest => "provider_tool_call_request",
         TranscriptItemKind::ToolResultReceived => "tool_result_received",
         TranscriptItemKind::TurnTerminalStatus => "turn_terminal_status",
+        TranscriptItemKind::LocalNotice => "local_notice",
     }
 }
 

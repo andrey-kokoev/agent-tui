@@ -11,6 +11,33 @@ pub enum TranscriptActor {
     Provider,
 }
 
+fn project_carrier_command_result(event: &SessionEvent) -> Option<TranscriptItem> {
+    let command = event.payload.get("command").and_then(|value| value.as_str())?;
+    let status = event
+        .payload
+        .get("status")
+        .and_then(|value| value.as_str())
+        .unwrap_or("ok");
+    let summary = event
+        .payload
+        .get("summary")
+        .or_else(|| event.payload.get("message"))
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty());
+    let text = summary
+        .map(|summary| format!("{status} {command} · {summary}"))
+        .unwrap_or_else(|| format!("{status} {command}"));
+    Some(TranscriptItem {
+        kind: TranscriptItemKind::LocalNotice,
+        actor: TranscriptActor::AgentTui,
+        turn_id: String::new(),
+        text,
+        sequence: None,
+        projection_key: Some(format!("command:{}", event.event_id)),
+        occurred_at: Some(event.occurred_at.clone()),
+    })
+}
+
 impl TranscriptActor {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -34,6 +61,7 @@ pub enum TranscriptItemKind {
     ProviderToolCallRequest,
     ToolResultReceived,
     TurnTerminalStatus,
+    LocalNotice,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,6 +87,7 @@ pub fn project_session_event(event: &SessionEvent) -> Option<TranscriptItem> {
         SessionEventKind::TurnCompleted
         | SessionEventKind::TurnFailed
         | SessionEventKind::TurnInterrupted => project_turn_terminal(event),
+        SessionEventKind::CarrierCommandExecuted => project_carrier_command_result(event),
         SessionEventKind::CarrierDiagnosticRecorded => project_carrier_diagnostic(event),
         _ => None,
     }
@@ -834,5 +863,53 @@ mod tests {
             json!({ "input_event_id": "input_1" }),
         ));
         assert!(item.is_none());
+    }
+
+    #[test]
+    fn suppresses_directive_evidence_from_conversation_projection() {
+        for event_kind in [
+            SessionEventKind::DirectiveEmissionAuthorized,
+            SessionEventKind::DirectiveEmissionRuleRecorded,
+            SessionEventKind::DirectiveEmitted,
+            SessionEventKind::DirectiveReceiptRecorded,
+            SessionEventKind::DirectiveCarrierAcceptedRecorded,
+        ] {
+            assert_eq!(
+                project_session_event(&event(
+                    event_kind.clone(),
+                    json!({
+                        "directive_kind": "operation_heartbeat",
+                        "visibility": "record_only",
+                        "directive_id": "directive_1"
+                    }),
+                )),
+                None,
+                "directive evidence must remain out of the transcript: {event_kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn projects_carrier_command_result_as_a_local_notice() {
+        let item = project_session_event(&event(
+            SessionEventKind::CarrierCommandExecuted,
+            json!({
+                "command": "/tools",
+                "status": "ok",
+                "summary": "Show discovered MCP tools and input schemas"
+            }),
+        ))
+        .expect("command result projection exists");
+
+        assert_eq!(item.kind, TranscriptItemKind::LocalNotice);
+        assert_eq!(item.actor, TranscriptActor::AgentTui);
+        assert_eq!(
+            item.text,
+            "ok /tools · Show discovered MCP tools and input schemas"
+        );
+        assert_eq!(
+            item.projection_key.as_deref(),
+            Some("command:session_event_projection_1")
+        );
     }
 }
