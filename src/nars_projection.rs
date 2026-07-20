@@ -650,8 +650,7 @@ impl NarsProjectionClient {
             let message = match self.socket.receive_text() {
                 Ok(message) => message,
                 Err(error) => {
-                    let reset_error = format!("nars_attach_stream_reset:{error}");
-                    let reconnect_result = self.reconnect();
+                    let (reset_error, reconnect_result) = self.reconnect_after_stream_error(error);
                     if !events.is_empty() {
                         return Ok(events);
                     }
@@ -668,7 +667,13 @@ impl NarsProjectionClient {
                         .get("code")
                         .and_then(Value::as_str)
                         .unwrap_or("unknown");
-                    return Err(format!("nars_attach_server_error:{code}"));
+                    let (reset_error, reconnect_result) =
+                        self.reconnect_after_stream_error(format!("protocol_error:{code}"));
+                    if !events.is_empty() {
+                        return Ok(events);
+                    }
+                    reconnect_result?;
+                    return Err(reset_error);
                 }
                 continue;
             }
@@ -761,7 +766,15 @@ impl NarsProjectionClient {
             if Instant::now() >= deadline {
                 return Err("nars_attach_history_read_timeout".to_string());
             }
-            let Some(message) = self.socket.receive_text()? else {
+            let message = match self.socket.receive_text() {
+                Ok(message) => message,
+                Err(error) => {
+                    let (reset_error, reconnect_result) = self.reconnect_after_stream_error(error);
+                    reconnect_result?;
+                    return Err(reset_error);
+                }
+            };
+            let Some(message) = message else {
                 std::thread::sleep(Duration::from_millis(10));
                 continue;
             };
@@ -773,7 +786,10 @@ impl NarsProjectionClient {
                     .get("code")
                     .and_then(Value::as_str)
                     .unwrap_or("unknown");
-                return Err(format!("nars_attach_server_error:{code}"));
+                let (reset_error, reconnect_result) =
+                    self.reconnect_after_stream_error(format!("protocol_error:{code}"));
+                reconnect_result?;
+                return Err(reset_error);
             }
             if event_name == Some("session_event") {
                 if let Some(event) = self.normalize_live_frame(&frame) {
@@ -881,6 +897,12 @@ impl NarsProjectionClient {
     fn reconnect(&mut self) -> Result<(), String> {
         self.socket = WebSocket::connect(&self.endpoint)?;
         self.subscribe()
+    }
+
+    fn reconnect_after_stream_error(&mut self, reason: impl Into<String>) -> (String, Result<(), String>) {
+        let reset_error = format!("nars_attach_stream_reset:{}", reason.into());
+        let reconnect_result = self.reconnect();
+        (reset_error, reconnect_result)
     }
 }
 
@@ -1812,6 +1834,81 @@ mod tests {
         assert_eq!(events[0].event_id, "final-before-eof");
         client.close().expect("close projection EOF client");
         server.join().expect("projection EOF harness completes");
+    }
+
+    #[test]
+    fn projection_poll_reconnects_after_websocket_error_frame() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind projection protocol error harness");
+        let port = listener
+            .local_addr()
+            .expect("projection protocol error harness address")
+            .port();
+        let endpoint = format!("ws://127.0.0.1:{port}/events");
+        let server = thread::spawn(move || {
+            for connection_index in 0..2 {
+                let (mut stream, _) = listener.accept().expect("accept projection protocol error client");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .expect("set projection protocol error timeout");
+                server_handshake(&mut stream);
+                let subscribe = read_client_json(&mut stream).expect("projection protocol error subscribe");
+                assert_request_method(&subscribe, "session.events.subscribe");
+                if connection_index == 0 {
+                    send_server_json(
+                        &mut stream,
+                        &json!({ "event": "websocket_error", "code": "protocol_error" }),
+                    );
+                } else {
+                    send_session_event(
+                        &mut stream,
+                        1,
+                        "user_message",
+                        "after-protocol-error",
+                        json!({ "content": "reconnected" }),
+                    );
+                    loop {
+                        let Some(frame) = read_client_json(&mut stream) else {
+                            break;
+                        };
+                        if frame.get("method").and_then(Value::as_str) == Some("session.close") {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
+        let mut client = NarsProjectionClient::connect(&endpoint).expect("connect projection protocol error client");
+        let reset_deadline = Instant::now() + Duration::from_secs(2);
+        let reset = loop {
+            match client.poll() {
+                Err(error) if error.starts_with("nars_attach_stream_reset:") => break error,
+                Ok(_) => {
+                    assert!(
+                        Instant::now() < reset_deadline,
+                        "protocol error did not report a stream reset"
+                    );
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("unexpected protocol error reset: {error}"),
+            }
+        };
+        assert!(reset.starts_with("nars_attach_stream_reset:"), "unexpected reset: {reset}");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let events = loop {
+            let events = client.poll().expect("poll reconnected protocol error stream");
+            if !events.is_empty() {
+                break events;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "reconnected event did not arrive after protocol error"
+            );
+            thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(events[0].event_id, "after-protocol-error");
+        client.close().expect("close projection protocol error client");
+        server.join().expect("projection protocol error harness completes");
     }
 
     #[test]
