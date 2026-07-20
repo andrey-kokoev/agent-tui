@@ -156,6 +156,14 @@ pub fn tool_aliases_for(tool_name: &str) -> Option<&'static [String]> {
         .map(|group| group.tools.as_slice())
 }
 
+pub fn canonical_tool_name(tool_name: &str) -> String {
+    if tool_name == "startup_sequence" {
+        EXPECTED_STARTUP_TOOL_NAME.to_string()
+    } else {
+        tool_name.to_string()
+    }
+}
+
 pub fn payload_reader_tools() -> &'static [String] {
     required_alias_group(
         operator_routing_contract(),
@@ -222,6 +230,15 @@ mod tests {
                 "startup_sequence".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn canonicalizes_startup_tool_alias_without_changing_other_tools() {
+        assert_eq!(
+            canonical_tool_name("startup_sequence"),
+            EXPECTED_STARTUP_TOOL_NAME
+        );
+        assert_eq!(canonical_tool_name("mcp_output_show"), "mcp_output_show");
     }
 
     #[test]

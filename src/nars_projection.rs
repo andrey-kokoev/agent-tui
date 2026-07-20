@@ -3,6 +3,7 @@ use crate::carrier_command::{CarrierCommand, OperatorSubmit, parse_operator_subm
 use crate::carrier_protocol::{SessionEvent, SessionEventKind, session_event_schema};
 use crate::composer_view_model::ComposerViewInput;
 use crate::layout_model::{LayoutConfig, TerminalSize};
+use crate::operator_routing_contract::canonical_tool_name;
 use crate::projection_state::TurnState;
 use crate::status_view_model::{RuntimePostureState, StatusViewInput};
 use crate::terminal_input_tick::{
@@ -251,6 +252,7 @@ fn parse_websocket_endpoint(endpoint: &str) -> Result<WebSocketEndpoint, String>
 struct WebSocket {
     stream: TcpStream,
     read_buffer: Vec<u8>,
+    peer_eof: bool,
 }
 
 impl WebSocket {
@@ -310,6 +312,7 @@ impl WebSocket {
         Ok(Self {
             stream,
             read_buffer: response[header_end..].to_vec(),
+            peer_eof: false,
         })
     }
 
@@ -360,35 +363,47 @@ impl WebSocket {
     }
 
     fn receive_text(&mut self) -> Result<Option<String>, String> {
-        self.read_available()?;
         loop {
-            let Some((opcode, payload)) = self.next_frame()? else {
+            if let Some((opcode, payload)) = self.next_frame()? {
+                match opcode {
+                    0x1 => {
+                        let text = String::from_utf8(payload)
+                            .map_err(|_| "nars_attach_text_frame_invalid_utf8".to_string())?;
+                        return Ok(Some(text));
+                    }
+                    0x8 => {
+                        let _ = self.send_close();
+                        return Err("nars_attach_websocket_closed".to_string());
+                    }
+                    0x9 => self.send_pong(&payload)?,
+                    0xA => {}
+                    _ => {}
+                }
+                continue;
+            }
+            if self.peer_eof {
+                return Err("nars_attach_websocket_eof".to_string());
+            }
+            if !self.read_available()? {
                 return Ok(None);
-            };
-            match opcode {
-                0x1 => {
-                    let text = String::from_utf8(payload)
-                        .map_err(|_| "nars_attach_text_frame_invalid_utf8".to_string())?;
-                    return Ok(Some(text));
-                }
-                0x8 => {
-                    let _ = self.send_close();
-                    return Err("nars_attach_websocket_closed".to_string());
-                }
-                0x9 => self.send_pong(&payload)?,
-                0xA => {}
-                _ => {}
             }
         }
     }
 
-    fn read_available(&mut self) -> Result<(), String> {
+    fn read_available(&mut self) -> Result<bool, String> {
+        let mut read_any = false;
         loop {
             let mut buffer = [0u8; 8192];
             match self.stream.read(&mut buffer) {
-                Ok(0) => return Err("nars_attach_websocket_eof".to_string()),
-                Ok(count) => self.read_buffer.extend_from_slice(&buffer[..count]),
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+                Ok(0) => {
+                    self.peer_eof = true;
+                    return Ok(read_any);
+                }
+                Ok(count) => {
+                    read_any = true;
+                    self.read_buffer.extend_from_slice(&buffer[..count]);
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(read_any),
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                 Err(error) => return Err(format!("nars_attach_frame_read_failed:{error}")),
             }
@@ -635,8 +650,13 @@ impl NarsProjectionClient {
             let message = match self.socket.receive_text() {
                 Ok(message) => message,
                 Err(error) => {
-                    self.reconnect()?;
-                    return Err(format!("nars_attach_stream_reset:{error}"));
+                    let reset_error = format!("nars_attach_stream_reset:{error}");
+                    let reconnect_result = self.reconnect();
+                    if !events.is_empty() {
+                        return Ok(events);
+                    }
+                    reconnect_result?;
+                    return Err(reset_error);
                 }
             };
             let Some(message) = message else { break };
@@ -1016,12 +1036,12 @@ fn normalize_nars_event(
         event_kind(&name),
         SessionEventKind::ProviderToolCallRequested
     ) {
-        let tool_name = value_string(payload.get("tool_name"))
-            .or_else(|| value_string(payload.get("name")))
-            .unwrap_or_else(|| "tool".to_string());
-        payload
-            .entry("tool_name".to_string())
-            .or_insert(json!(tool_name));
+        let tool_name = canonical_tool_name(
+            &value_string(payload.get("tool_name"))
+                .or_else(|| value_string(payload.get("name")))
+                .unwrap_or_else(|| "tool".to_string()),
+        );
+        payload.insert("tool_name".to_string(), json!(tool_name));
         let turn_id = value_string(payload.get("turn_id")).unwrap_or_default();
         payload
             .entry("turn_id".to_string())
@@ -1036,12 +1056,12 @@ fn normalize_nars_event(
         }
     }
     if matches!(event_kind(&name), SessionEventKind::ToolResultReceived) {
-        let tool_name = value_string(payload.get("tool_name"))
-            .or_else(|| value_string(payload.get("name")))
-            .unwrap_or_else(|| "tool".to_string());
-        payload
-            .entry("tool_name".to_string())
-            .or_insert(json!(tool_name));
+        let tool_name = canonical_tool_name(
+            &value_string(payload.get("tool_name"))
+                .or_else(|| value_string(payload.get("name")))
+                .unwrap_or_else(|| "tool".to_string()),
+        );
+        payload.insert("tool_name".to_string(), json!(tool_name));
         payload
             .entry("status".to_string())
             .or_insert(json!("completed"));
@@ -1348,7 +1368,7 @@ pub fn run_attached_projection(
 mod tests {
     use super::*;
     use std::io::{Read, Write};
-    use std::net::{TcpListener, TcpStream};
+    use std::net::{Shutdown, TcpListener, TcpStream};
     use std::thread;
 
     fn read_http_request(stream: &mut TcpStream) -> String {
@@ -1691,6 +1711,110 @@ mod tests {
     }
 
     #[test]
+    fn websocket_receive_drains_complete_frame_before_eof() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind websocket EOF harness");
+        let address = listener.local_addr().expect("websocket EOF harness address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept websocket EOF client");
+            send_server_json(&mut stream, &json!({ "event": "final" }));
+            stream
+                .shutdown(Shutdown::Write)
+                .expect("close websocket EOF write side");
+        });
+
+        let stream = TcpStream::connect(address).expect("connect websocket EOF client");
+        stream
+            .set_nonblocking(true)
+            .expect("set websocket EOF client nonblocking");
+        let mut websocket = WebSocket {
+            stream,
+            read_buffer: Vec::new(),
+            peer_eof: false,
+        };
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let final_frame = loop {
+            match websocket.receive_text() {
+                Ok(Some(text)) => break text,
+                Ok(None) => {
+                    assert!(Instant::now() < deadline, "final websocket frame did not arrive");
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("final websocket frame was discarded: {error}"),
+            }
+        };
+        assert_eq!(
+            serde_json::from_str::<Value>(&final_frame).expect("final websocket JSON"),
+            json!({ "event": "final" })
+        );
+        assert_eq!(
+            websocket
+                .receive_text()
+                .expect_err("EOF is reported after the buffered frame"),
+            "nars_attach_websocket_eof"
+        );
+        server.join().expect("websocket EOF harness completes");
+    }
+
+    #[test]
+    fn projection_poll_returns_buffered_event_before_eof_reset() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind projection EOF harness");
+        let port = listener
+            .local_addr()
+            .expect("projection EOF harness address")
+            .port();
+        let endpoint = format!("ws://127.0.0.1:{port}/events");
+        let server = thread::spawn(move || {
+            for connection_index in 0..2 {
+                let (mut stream, _) = listener.accept().expect("accept projection client");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .expect("set projection harness timeout");
+                server_handshake(&mut stream);
+                let subscribe = read_client_json(&mut stream).expect("projection subscribe request");
+                assert_request_method(&subscribe, "session.events.subscribe");
+                if connection_index == 0 {
+                    send_session_event(
+                        &mut stream,
+                        1,
+                        "user_message",
+                        "final-before-eof",
+                        json!({ "content": "final event" }),
+                    );
+                    stream
+                        .shutdown(Shutdown::Write)
+                        .expect("close projection harness write side");
+                } else {
+                    loop {
+                        let Some(frame) = read_client_json(&mut stream) else {
+                            break;
+                        };
+                        if frame.get("method").and_then(Value::as_str) == Some("session.close") {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
+        let mut client = NarsProjectionClient::connect(&endpoint).expect("connect projection EOF client");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let events = loop {
+            match client.poll() {
+                Ok(events) if !events.is_empty() => break events,
+                Ok(_) => {
+                    assert!(Instant::now() < deadline, "buffered event did not arrive");
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("buffered event was lost before EOF reset: {error}"),
+            }
+        };
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_id, "final-before-eof");
+        client.close().expect("close projection EOF client");
+        server.join().expect("projection EOF harness completes");
+    }
+
+    #[test]
     fn normalizes_conversation_events_for_existing_projection() {
         let user = normalize_nars_event(
             &json!({
@@ -1790,6 +1914,25 @@ mod tests {
         assert_eq!(result.event_kind, SessionEventKind::ToolResultReceived);
         assert_eq!(result.payload["tool_name"], "mcp_output_show");
         assert_eq!(result.payload["status"], "completed");
+
+        let startup_alias = normalize_nars_event(
+            &json!({
+                "event": "tool_call",
+                "event_id": "event-5-alias",
+                "turn_id": "turn-2",
+                "tool_name": "startup_sequence",
+                "arguments": {}
+            }),
+            Some(11),
+            None,
+            None,
+            None,
+        )
+        .expect("startup alias tool event");
+        assert_eq!(
+            startup_alias.payload["tool_name"],
+            "agent_context_startup_sequence"
+        );
 
         let completed = normalize_nars_event(
             &json!({

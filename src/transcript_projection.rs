@@ -1,4 +1,5 @@
 use crate::carrier_protocol::{SessionEvent, SessionEventKind};
+use crate::operator_routing_contract::canonical_tool_name;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TranscriptActor {
@@ -242,7 +243,7 @@ fn project_provider_text_delta(event: &SessionEvent) -> Option<TranscriptItem> {
 
 fn project_provider_tool_call_request(event: &SessionEvent) -> Option<TranscriptItem> {
     let turn_id = event.payload.get("turn_id")?.as_str()?.to_string();
-    let tool_name = event.payload.get("tool_name")?.as_str()?;
+    let tool_name = canonical_tool_name(event.payload.get("tool_name")?.as_str()?);
     let arguments_summary = payload_ref_summary(event, "arguments_ref").unwrap_or_else(|| {
         event
             .payload
@@ -266,7 +267,7 @@ fn project_provider_tool_call_request(event: &SessionEvent) -> Option<Transcript
 }
 
 fn project_tool_result_received(event: &SessionEvent) -> Option<TranscriptItem> {
-    let tool_name = event.payload.get("tool_name")?.as_str()?;
+    let tool_name = canonical_tool_name(event.payload.get("tool_name")?.as_str()?);
     let status = event.payload.get("status")?.as_str()?;
     let duration_ms = event
         .payload
@@ -295,7 +296,13 @@ fn project_tool_result_received(event: &SessionEvent) -> Option<TranscriptItem> 
             .and_then(|value| value.as_str())
             .unwrap_or("")
             .to_string(),
-        text: tool_result_text(status, tool_name, duration_ms, &result_summary, result_text),
+        text: tool_result_text(
+            status,
+            &tool_name,
+            duration_ms,
+            &result_summary,
+            result_text,
+        ),
         sequence: None,
         projection_key: None,
         occurred_at: Some(event.occurred_at.clone()),
@@ -708,6 +715,32 @@ mod tests {
         assert_eq!(item.turn_id, "turn_1");
         assert_eq!(item.sequence, Some(2));
         assert_eq!(item.text, "site_loop_run_once({})");
+    }
+
+    #[test]
+    fn projects_startup_tool_alias_with_canonical_name() {
+        let item = project_session_event(&event(
+            SessionEventKind::ProviderToolCallRequested,
+            json!({
+                "turn_id": "turn_1",
+                "tool_name": "startup_sequence",
+                "arguments_summary": "{}"
+            }),
+        ))
+        .expect("projection exists");
+
+        assert_eq!(item.text, "agent_context_startup_sequence({})");
+
+        let result = project_session_event(&event(
+            SessionEventKind::ToolResultReceived,
+            json!({
+                "tool_name": "startup_sequence",
+                "status": "ok",
+                "duration_ms": 8
+            }),
+        ))
+        .expect("result projection exists");
+        assert_eq!(result.text, "ok agent_context_startup_sequence in 8ms");
     }
 
     #[test]
