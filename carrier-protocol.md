@@ -35,7 +35,7 @@ The carrier protocol does not own:
 
 The durable protocol should live in a shared carrier package before both `agent-cli` and `agent-tui` depend on it.
 
-The executable shared package is `@narada2/carrier-protocol`.
+The executable shared package is `@narada-core/carrier-protocol`.
 
 This document is the prose contract. The package provides shared validators, constants, schema metadata, helpers, and compatibility adapters.
 
