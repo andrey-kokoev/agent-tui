@@ -2,9 +2,36 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
-const PROVIDER_ADAPTER_CONTRACT_JSON: &str = include_str!(
-    "../../narada/packages/carrier-provider-contract/contracts/provider-adapters.json"
-);
+// Frozen local snapshot of the former narada
+// `packages/carrier-provider-contract/contracts/provider-adapters.json`.
+// The upstream package was removed from the narada repo in commit 6cc27e7b
+// ("feat: complete invokable intelligence cutover (#2180-#2186)") and has no
+// same-shape successor; provider/model selection authority moved to the
+// canonical invokable-intelligence registry. This contract is agent-tui-local
+// posture, so the last upstream revision is embedded here.
+const PROVIDER_ADAPTER_CONTRACT_JSON: &str = r#"{
+  "schema": "narada.agent_tui.provider_adapter_contract.v0",
+  "provider_execution_env_var": "NARADA_AGENT_TUI_ENABLE_PROVIDER_EXECUTION",
+  "provider_adapter_kind_env_var": "NARADA_AGENT_TUI_PROVIDER_ADAPTER_KIND",
+  "intelligence_provider_env_var": "NARADA_INTELLIGENCE_PROVIDER",
+  "provider_model_env_var": "KIMI_CODE_MODEL",
+  "ai_thinking_env_var": "NARADA_AI_THINKING",
+  "ai_stream_env_var": "NARADA_AI_STREAM",
+  "admitted_providers": [
+    "codex-subscription",
+    "kimi-api",
+    "kimi-code-api",
+    "openai-api",
+    "anthropic-api",
+    "deepseek-api",
+    "glm-api",
+    "openrouter-api"
+  ],
+  "scripted_provider_adapter_kind": "scripted_provider_adapter",
+  "production_provider_adapter_kind": "codex_subscription_adapter",
+  "production_provider_adapter_implemented": true
+}
+"#;
 const EXPECTED_SCHEMA: &str = "narada.agent_tui.provider_adapter_contract.v0";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

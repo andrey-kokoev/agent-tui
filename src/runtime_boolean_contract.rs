@@ -2,8 +2,9 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
-const RUNTIME_BOOLEAN_VALUES_CONTRACT_JSON: &str =
-    include_str!("../../narada/packages/carrier-runtime-contract/contracts/boolean-values.json");
+const RUNTIME_BOOLEAN_VALUES_CONTRACT_JSON: &str = include_str!(
+    "../../narada/packages/operator-surface-runtime-contract/contracts/boolean-values.json"
+);
 const EXPECTED_SCHEMA: &str = "narada.carrier.runtime_boolean_values.v1";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

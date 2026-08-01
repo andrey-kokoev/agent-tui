@@ -2,8 +2,9 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
-const TERMINAL_RUNTIME_CONTRACT_JSON: &str =
-    include_str!("../../narada/packages/carrier-runtime-contract/contracts/terminal-runtime.json");
+const TERMINAL_RUNTIME_CONTRACT_JSON: &str = include_str!(
+    "../../narada/packages/operator-surface-runtime-contract/contracts/terminal-runtime.json"
+);
 const EXPECTED_SCHEMA: &str = "narada.agent_tui.terminal_runtime_contract.v0";
 const EXPECTED_TERMINAL_RENDERING_ENV_VAR: &str = "NARADA_AGENT_TUI_ENABLE_TERMINAL_RENDERING";
 const EXPECTED_TERMINAL_MODE_ENV_VAR: &str = "NARADA_AGENT_TUI_TERMINAL_MODE";
