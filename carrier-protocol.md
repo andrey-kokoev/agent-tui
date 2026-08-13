@@ -331,7 +331,7 @@ Required event envelope:
   "carrier_session_id": "carrier_...",
   "agent_id": "sonar.resident",
   "site_id": "narada-sonar",
-  "site_root": "D:/code/narada.sonar",
+  "site_root": "<src-root>/narada.sonar",
   "payload": {}
 }
 ```

@@ -2867,17 +2867,18 @@ mod tests {
 
     #[test]
     fn wrap_source_line_aligns_powershell_continuation_under_command() {
+        let continuation = " ".repeat("PS C:\\workspace\\narada> ".chars().count());
         let lines = wrap_source_line(
-            "PS D:\\code\\narada> narada-proper-mcp --site-root D:\\code\\narada --reconcile-mcp-policy --apply",
+            "PS C:\\workspace\\narada> narada-proper-mcp --site-root C:\\workspace\\narada --reconcile-mcp-policy --apply",
             54,
         );
 
         assert_eq!(
             lines,
             vec![
-                "PS D:\\code\\narada> narada-proper-mcp --site-root".to_string(),
-                "                   D:\\code\\narada".to_string(),
-                "                   --reconcile-mcp-policy --apply".to_string()
+                "PS C:\\workspace\\narada> narada-proper-mcp --site-root".to_string(),
+                format!("{continuation}C:\\workspace\\narada"),
+                format!("{continuation}--reconcile-mcp-policy --apply")
             ]
         );
     }
@@ -4255,12 +4256,12 @@ mod tests {
 
     #[test]
     fn structured_body_spans_style_key_value_windows_path_as_code() {
-        let spans = structured_body_spans("Root: D:\\code\\narada", ui_theme::body());
+        let spans = structured_body_spans("Root: C:\\workspace\\narada", ui_theme::body());
 
         assert_eq!(spans.len(), 3);
         assert_eq!(spans[0].content.as_ref(), "Root");
         assert_eq!(spans[0].style.fg, Some(Color::Yellow));
-        assert_eq!(spans[2].content.as_ref(), "D:\\code\\narada");
+        assert_eq!(spans[2].content.as_ref(), "C:\\workspace\\narada");
         assert_eq!(spans[2].style.fg, Some(Color::Gray));
     }
 
@@ -4323,10 +4324,10 @@ mod tests {
 
     #[test]
     fn structured_body_spans_style_powershell_prompt_as_shell_structure() {
-        let spans = structured_body_spans("PS D:\\code\\narada> pnpm test", ui_theme::body());
+        let spans = structured_body_spans("PS C:\\workspace\\narada> pnpm test", ui_theme::body());
 
         assert_eq!(spans.len(), 2);
-        assert_eq!(spans[0].content.as_ref(), "PS D:\\code\\narada> ");
+        assert_eq!(spans[0].content.as_ref(), "PS C:\\workspace\\narada> ");
         assert_eq!(spans[0].style.fg, Some(Color::DarkGray));
         assert_eq!(spans[1].content.as_ref(), "pnpm test");
         assert_eq!(spans[1].style.fg, Some(Color::Gray));
@@ -4334,21 +4335,21 @@ mod tests {
 
     #[test]
     fn structured_body_spans_do_not_treat_indented_paths_as_key_values() {
-        let spans = structured_body_spans("  Root: D:\\code\\narada", ui_theme::body());
+        let spans = structured_body_spans("  Root: C:\\workspace\\narada", ui_theme::body());
 
         assert_eq!(spans.len(), 3);
         assert_eq!(spans[0].content.as_ref(), "  ");
         assert_eq!(spans[0].style.fg, Some(Color::DarkGray));
         assert_eq!(spans[1].content.as_ref(), "Root: ");
         assert_eq!(spans[1].style.fg, Some(Color::White));
-        assert_eq!(spans[2].content.as_ref(), "D:\\code\\narada");
+        assert_eq!(spans[2].content.as_ref(), "C:\\workspace\\narada");
         assert_eq!(spans[2].style.fg, Some(Color::Gray));
     }
 
     #[test]
     fn inline_code_spans_style_code_content_without_rendering_backticks() {
         let spans = inline_code_spans(
-            "Use `config.json` at `D:\\code\\narada` now",
+            "Use `config.json` at `C:\\workspace\\narada` now",
             ui_theme::body(),
         );
 
@@ -4359,7 +4360,7 @@ mod tests {
         assert_eq!(spans[1].style.fg, Some(Color::Gray));
         assert_eq!(spans[2].content.as_ref(), " at ");
         assert_eq!(spans[2].style.fg, Some(Color::White));
-        assert_eq!(spans[3].content.as_ref(), "D:\\code\\narada");
+        assert_eq!(spans[3].content.as_ref(), "C:\\workspace\\narada");
         assert_eq!(spans[3].style.fg, Some(Color::Gray));
         assert_eq!(spans[4].content.as_ref(), " now");
         assert_eq!(spans[4].style.fg, Some(Color::White));
@@ -4367,12 +4368,12 @@ mod tests {
 
     #[test]
     fn inline_code_spans_style_plain_windows_paths_as_code() {
-        let spans = inline_code_spans("Current Site at D:\\code\\narada now", ui_theme::body());
+        let spans = inline_code_spans("Current Site at C:\\workspace\\narada now", ui_theme::body());
 
         assert_eq!(spans.len(), 3);
         assert_eq!(spans[0].content.as_ref(), "Current Site at ");
         assert_eq!(spans[0].style.fg, Some(Color::White));
-        assert_eq!(spans[1].content.as_ref(), "D:\\code\\narada");
+        assert_eq!(spans[1].content.as_ref(), "C:\\workspace\\narada");
         assert_eq!(spans[1].style.fg, Some(Color::Gray));
         assert_eq!(spans[2].content.as_ref(), " now");
         assert_eq!(spans[2].style.fg, Some(Color::White));
@@ -4380,10 +4381,10 @@ mod tests {
 
     #[test]
     fn inline_code_spans_keep_trailing_punctuation_outside_windows_path() {
-        let spans = inline_code_spans("Open D:\\code\\narada.", ui_theme::body());
+        let spans = inline_code_spans("Open C:\\workspace\\narada.", ui_theme::body());
 
         assert_eq!(spans.len(), 3);
-        assert_eq!(spans[1].content.as_ref(), "D:\\code\\narada");
+        assert_eq!(spans[1].content.as_ref(), "C:\\workspace\\narada");
         assert_eq!(spans[1].style.fg, Some(Color::Gray));
         assert_eq!(spans[2].content.as_ref(), ".");
         assert_eq!(spans[2].style.fg, Some(Color::White));

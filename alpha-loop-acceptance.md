@@ -9,7 +9,7 @@ Verify that `agent-tui` is a projection client attached to a Narada Agent Runtim
 Run the Narada workspace launcher with the `narada-agent-runtime-server` runtime and the `agent-tui` projection selected. Start the TUI from the emitted projection tab, or attach directly with the binding produced by the launcher:
 
 ```powershell
-cargo run --manifest-path D:\code\agent-tui\Cargo.toml --bin narada-agent-tui -- --launch-binding <launch-binding-path> --identity <canonical-agent-id>
+cargo run --manifest-path <src-root>\agent-tui\Cargo.toml --bin narada-agent-tui -- --launch-binding <launch-binding-path> --identity <canonical-agent-id>
 ```
 
 The binding must resolve to the NARS WebSocket event endpoint. Do not pass the removed legacy runtime flags or `--site-root`, `--control-jsonl`, or `--session-jsonl`.

@@ -148,7 +148,7 @@ mod tests {
             carrier_session_id: "carrier_fixture_1".to_string(),
             agent_id: "sonar.resident".to_string(),
             site_id: "narada-sonar".to_string(),
-            site_root: "D:/code/narada.sonar".to_string(),
+            site_root: "C:/workspace/narada.sonar".to_string(),
             payload,
         }
     }

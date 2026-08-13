@@ -9,7 +9,7 @@ The Rust crate remains `narada-agent-tui`; this repository/package is published 
 Tests and contract-backed fixtures read shared Narada files from a sibling repository at `../narada` relative to this repository root. The expected local workspace layout is:
 
 ```text
-D:/code/
+<src-root>/
   agent-tui/
   narada/
 ```

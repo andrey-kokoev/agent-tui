@@ -2028,7 +2028,7 @@ mod tests {
         .expect("startup alias tool event");
         assert_eq!(
             startup_alias.payload["tool_name"],
-            "agent_context_startup_sequence"
+            "agent_orientation_read"
         );
 
         let completed = normalize_nars_event(

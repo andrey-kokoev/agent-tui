@@ -9,7 +9,7 @@ Verify that a governed provider-backed session remains owned by NARS while `agen
 Run the Narada workspace launcher with the `narada-agent-runtime-server` runtime, the intended intelligence provider, and the `agent-tui` projection selected. Start the TUI from the emitted projection tab. For a direct attach, use the launch binding created by the launcher:
 
 ```powershell
-cargo run --manifest-path D:\code\agent-tui\Cargo.toml --bin narada-agent-tui -- --launch-binding <launch-binding-path> --identity <canonical-agent-id>
+cargo run --manifest-path <src-root>\agent-tui\Cargo.toml --bin narada-agent-tui -- --launch-binding <launch-binding-path> --identity <canonical-agent-id>
 ```
 
 The binding must resolve to the NARS WebSocket event endpoint. Do not pass the removed provider, MCP, interactive-loop, control-JSONL, or session-JSONL flags.

@@ -7,7 +7,7 @@ const OPERATOR_ROUTING_CONTRACT_JSON: &str =
     include_str!("../../narada/packages/carrier-routing-contract/contracts/operator-routing.json");
 const EXPECTED_SCHEMA: &str = "narada.carrier.operator_routing_contract.v1";
 const EXPECTED_STARTUP_ROUTE_ID: &str = "startup_sequence";
-const EXPECTED_STARTUP_TOOL_NAME: &str = "agent_context_startup_sequence";
+const EXPECTED_STARTUP_TOOL_NAME: &str = "agent_orientation_read";
 const EXPECTED_OUTPUT_READER_ROUTE_ID: &str = "mcp_output_reader";
 const EXPECTED_OUTPUT_READER_TOOL_NAME: &str = "mcp_output_show";
 const EXPECTED_OUTPUT_REF_PREFIX: &str = "mcp_output:";
@@ -227,6 +227,7 @@ mod tests {
             tool_aliases_for(EXPECTED_STARTUP_TOOL_NAME).expect("startup aliases exist"),
             &[
                 EXPECTED_STARTUP_TOOL_NAME.to_string(),
+                "agent_context_startup_sequence".to_string(),
                 "startup_sequence".to_string()
             ]
         );

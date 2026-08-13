@@ -436,7 +436,7 @@ mod tests {
             carrier_session_id: "carrier_fixture_1".to_string(),
             agent_id: "sonar.resident".to_string(),
             site_id: "narada-sonar".to_string(),
-            site_root: "D:/code/narada.sonar".to_string(),
+            site_root: "C:/workspace/narada.sonar".to_string(),
             payload,
         }
     }
@@ -729,7 +729,7 @@ mod tests {
         ))
         .expect("projection exists");
 
-        assert_eq!(item.text, "agent_context_startup_sequence({})");
+        assert_eq!(item.text, "agent_orientation_read({})");
 
         let result = project_session_event(&event(
             SessionEventKind::ToolResultReceived,
@@ -740,7 +740,7 @@ mod tests {
             }),
         ))
         .expect("result projection exists");
-        assert_eq!(result.text, "ok agent_context_startup_sequence in 8ms");
+        assert_eq!(result.text, "ok agent_orientation_read in 8ms");
     }
 
     #[test]

@@ -2459,7 +2459,7 @@ fn renderer_acceptance_aligns_wrapped_diff_continuation_under_payload() {
 
 #[test]
 fn renderer_acceptance_aligns_wrapped_powershell_continuation_under_command() {
-    let body = "PS D:\\code\\narada> narada-proper-mcp --site-root D:\\code\\narada --reconcile-mcp-policy --apply";
+    let body = "PS C:\\workspace\\narada> narada-proper-mcp --site-root C:\\workspace\\narada --reconcile-mcp-policy --apply";
     let model = build_app_view(&AppViewInput {
         terminal_size: TerminalSize {
             width: 58,
@@ -2501,7 +2501,7 @@ fn renderer_acceptance_aligns_wrapped_powershell_continuation_under_command() {
     render_app_to_buffer(&model, &mut buffer);
 
     let (prompt_x, prompt_y) =
-        find_text_position(&buffer, "PS D:\\code\\narada>").expect("PowerShell prompt is visible");
+        find_text_position(&buffer, "PS C:\\workspace\\narada>").expect("PowerShell prompt is visible");
     let (command_x, _) =
         find_text_position(&buffer, "narada-proper-mcp").expect("PowerShell command is visible");
     let (continuation_x, continuation_y) = find_text_position(&buffer, "--reconcile-mcp-policy")
@@ -2930,7 +2930,7 @@ fn renderer_acceptance_trims_boundary_blank_body_lines_without_collapsing_intern
 
 #[test]
 fn renderer_acceptance_styles_inline_code_spans_in_body_text() {
-    let body = "Current Site is `narada-proper` at `D:\\code\\narada`.";
+    let body = "Current Site is `narada-proper` at `C:\\workspace\\narada`.";
     let model = build_app_view(&AppViewInput {
         terminal_size: TerminalSize {
             width: 96,
@@ -2972,11 +2972,11 @@ fn renderer_acceptance_styles_inline_code_spans_in_body_text() {
     render_app_to_buffer(&model, &mut buffer);
     let text = buffer_text(&buffer);
 
-    assert!(text.contains("  Current Site is narada-proper at D:\\code\\narada."));
+    assert!(text.contains("  Current Site is narada-proper at C:\\workspace\\narada."));
     assert!(!text.contains("`narada-proper`"));
     let (site_x, site_y) =
         find_text_position(&buffer, "narada-proper").expect("site inline code is visible");
-    assert!(find_text_position(&buffer, "D:\\code\\narada").is_some());
+    assert!(find_text_position(&buffer, "C:\\workspace\\narada").is_some());
     assert_eq!(buffer[(site_x, site_y)].fg, Color::Gray);
     assert_eq!(buffer[(3, 2)].fg, Color::White);
 }
